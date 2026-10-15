@@ -1,7 +1,7 @@
 # GeoMind 架构设计文档
 
-> 版本：v1.3（参赛技术方案基线）
-> 变更记录：v1.0 初版（六层架构/Schema/Skill 插件/OB 存储/两条时序）；v1.1 新增第 9 章「轻量 Web 演示层设计（可替换壳）」；v1.2 据 SeekDB 实测新增 §6.1、DDL 去 SRID、ADAPTIVE PRE-FILTER、第五模全文；**v1.3 环境升级为 SeekDB V1.4.0（Docker 容器，镜像 quay.io/oceanbase/seekdb:latest，内核 4.3.5.3，Built Aug 26 2026）**，DDL 以 §6.3 正式建表语句为准（SPATIAL KEY/VECTOR KEY/FULLTEXT KEY，禁止 REPLICA_NUM 等分布式选项），V1.4 确认 ST_Intersection/ST_Union_Agg 不存在（ERROR 1305），V1.3 原生实例完整保留为回滚方案。
+> 版本：v1.4（参赛技术方案基线）
+> 变更记录：v1.0 初版（六层架构/Schema/Skill 插件/OB 存储/两条时序）；v1.1 新增第 9 章「轻量 Web 演示层设计（可替换壳）」；v1.2 据 SeekDB 实测新增 §6.1、DDL 去 SRID、ADAPTIVE PRE-FILTER、第五模全文；v1.3 环境升级为 SeekDB V1.4.0（Docker 容器，镜像 quay.io/oceanbase/seekdb:latest，内核 4.3.5.3，Built Aug 26 2026），DDL 以 §6.3 正式建表语句为准（SPATIAL KEY/VECTOR KEY/FULLTEXT KEY，禁止 REPLICA_NUM 等分布式选项），V1.4 确认 ST_Intersection/ST_Union_Agg 不存在（ERROR 1305），V1.3 原生实例完整保留为回滚方案；**v1.4（2026-10-15，据 10 万级压测 + 生产库落地）**：§6.3 DDL 增 `lon/lat/grid_id` 冗余列与 `KEY(lon,lat)`/`KEY(grid_id)`/标量复合索引（SPATIAL INDEX 实测完全不参与查询计划，加速路径改由冗余列承担），权威源为 `backend/db/migrations/001_init_schema.sql`（已在 geomind 库实跑）；§6.4 坐实 MBR* 函数不存在、空间连接 10 万级结论与两个绕行方案量化；§6.6 四模 SQL 固化为「MBR 预筛 + ST 精确复核」两段式，坐实全文 MATCH 进入 PRE-FILTER（`pushdown_match_filter`），补生产库四模闭环实测；§6.7 空间聚合改用冗余归属列；§12 地基项 #3 勾选完成。
 > 定位：2026 OceanBase 数据库大赛 · 高德赛道 —— AI + 数据库应用开发方向的核心架构交付物
 > 读者：开发三人组、答辩评委、后续接手者。本文档精度达到"可直接据此编码"。
 > 事实标注约定：【已查证】= 经 OceanBase 官方文档 / 高德官方材料 / 官方仓库逐字核实；【待实测】= 官方文档未承诺或未逐字核实，须在赛题环境用 EXPLAIN / 实跑验证。来源见文末附录。
@@ -582,6 +582,17 @@ docker run -d --name seekdb --restart unless-stopped `
 
 ### 6.3 完整 DDL（SeekDB 实测可跑）
 
+> **权威源文件：`backend/db/migrations/001_init_schema.sql`**（2026-10-15 已在 `geomind` 库实跑通过：6 张表、7 类索引、0 错误、0.7 s）。本节与之等价，二者冲突时以文件为准。
+
+> **★ 冗余列是本 DDL 的关键修订**（依据《压测报告-10万级.md》）：`lon/lat + KEY(lon,lat)` 用于 MBR 预筛、`grid_id + KEY(grid_id)` 用于归属连接。原因见 §6.4 空间索引结论——**SPATIAL INDEX 在 V1.4 完全不参与查询计划**，因此真正的加速路径是这两组冗余列。维护约定（ETL 直写优先，库内兜底回填见文件末尾注释）：
+> ```sql
+> UPDATE dim_poi SET lon = ST_X(location), lat = ST_Y(location),
+>   grid_id = CAST(FLOOR((ST_Y(location)-30.45)/0.01) AS SIGNED)*50
+>           + CAST(FLOOR((ST_X(location)-103.85)/0.01) AS SIGNED) + 1
+> WHERE lon IS NULL;   -- 10 万行实测 906 ms，仍在库内算
+> ```
+> 一致性校验（生产库实测三项全 0）：`SELECT SUM(lon IS NULL OR lat IS NULL OR grid_id IS NULL), SUM(ABS(lon-ST_X(location))>1e-9 OR ABS(lat-ST_Y(location))>1e-9), SUM(grid_id <> <公式>) FROM dim_poi;`
+
 ```sql
 -- V1.4.0 项目正式 DDL：语法经 V1.4 实测校验（SPATIAL KEY / VECTOR KEY / FULLTEXT KEY）；
 -- 禁止 REPLICA_NUM 等分布式选项；向量 LIB=VSAG 省略（默认 vsag）。
@@ -596,10 +607,18 @@ CREATE TABLE dim_poi (
   address       VARCHAR(300),
   city          VARCHAR(50),
   location      POINT NOT NULL,                   -- SRID 0，WGS84 经纬度
+  lon           DOUBLE,                           -- ★冗余：MBR 预筛左边界（与 location 同源）
+  lat           DOUBLE,                           -- ★冗余：MBR 预筛下边界
+  grid_id       BIGINT,                           -- ★冗余：网格归属，替代 ST_Contains 连接
   rating        DECIMAL(3,1) DEFAULT 0,
   attrs         JSON,                               -- 营业/停车/人均等灵活属性
   status        TINYINT      NOT NULL DEFAULT 1,    -- 1=营业中
   emb           VECTOR(1024),                       -- BGE-m3，V1.4 已实测 1024 维
+  -- 以下三个 KEY 是查询真正会走的路径（10 万级压测实测）
+  KEY idx_poi_bbox (lon, lat),                      -- MBR 预筛：圈选 15.7→4.6 ms、KNN 19.4→11.8 ms
+  KEY idx_poi_grid (grid_id),                       -- 网格归属 JOIN：274→2.2 ms
+  KEY idx_poi_cat_stat_rating (category_id, status, rating),
+  -- 以下三个为模态索引；SPATIAL KEY 当前不参与计划，保留待内核修复
   SPATIAL KEY idx_poi_loc (location),
   VECTOR KEY idx_poi_emb (emb) WITH (DISTANCE=COSINE, TYPE=HNSW, M=16, EF_CONSTRUCTION=200, EF_SEARCH=64),
   FULLTEXT KEY ft_poi_name (name) WITH PARSER ngram PARSER_PROPERTIES=(ngram_token_size=2)
@@ -620,19 +639,30 @@ CREATE TABLE fact_store (
   area_sqm      DECIMAL(8,1),
   streetfront_tier CHAR(4),                -- 临街档位 W1-W4
   location      POINT NOT NULL,            -- SRID 0，WGS84 经纬度
+  lon           DOUBLE,                    -- ★冗余：MBR 预筛
+  lat           DOUBLE,
+  grid_id       BIGINT,                    -- ★冗余：网格归属
   attrs         JSON,
   emb           VECTOR(1024),
+  KEY idx_store_bbox (lon, lat),
+  KEY idx_store_grid (grid_id),
   SPATIAL KEY idx_store_loc (location),
   VECTOR KEY idx_store_emb (emb) WITH (DISTANCE=COSINE, TYPE=HNSW, M=16, EF_CONSTRUCTION=200, EF_SEARCH=64)
 );
 
 -- 事实表：百米网格客流（空间抽象层）
+-- 网格规格（样例，固化在 ETL 与文档中）：原点 (103.85, 30.45)，边长 0.01 度（约 1 km），
+--   50 列 × 40 行 = 2000 网格；grid_id = FLOOR((lat-30.45)/0.01)*50 + FLOOR((lon-103.85)/0.01) + 1
 CREATE TABLE fact_traffic_grid (
   grid_id       BIGINT,
+  time_bucket   VARCHAR(32),               -- workday_evening / weekend_noon ...
   grid_poly     POLYGON NOT NULL,          -- SRID 0，WGS84 经纬度
-  time_bucket   VARCHAR(32),             -- workday_evening / weekend ...
+  center_lon    DOUBLE,
+  center_lat    DOUBLE,
   resident_cnt  INT,
   flow_cnt      INT,
+  PRIMARY KEY (grid_id, time_bucket),
+  KEY idx_grid_time (time_bucket),
   SPATIAL KEY idx_grid_poly (grid_poly)
 );
 
@@ -649,10 +679,12 @@ CREATE TABLE scene_solution (
 -- 知识库切片（长期记忆，复用多模检索）
 CREATE TABLE knowledge_doc (
   doc_id        BIGINT PRIMARY KEY,
+  title         VARCHAR(200),
   text          TEXT,
   meta          JSON,
   emb           VECTOR(1024),
-  VECTOR KEY idx_kb_emb (emb) WITH (DISTANCE=COSINE, TYPE=HNSW, M=16, EF_CONSTRUCTION=200, EF_SEARCH=64)
+  VECTOR KEY idx_kb_emb (emb) WITH (DISTANCE=COSINE, TYPE=HNSW, M=16, EF_CONSTRUCTION=200, EF_SEARCH=64),
+  FULLTEXT KEY ft_kb_text (text) WITH PARSER ngram PARSER_PROPERTIES=(ngram_token_size=2)
 );
 ```
 
@@ -676,35 +708,59 @@ CREATE TABLE knowledge_doc (
 | 全文 | MATCH(name) AGAINST(... IN BOOLEAN MODE) | 中文 ngram 全文召回 | 【已实跑通过：FULLTEXT ... WITH PARSER ngram】 |
 | 确认不可用 | ST_Union_Agg（聚合并集） | 合并一组多边形 | 【V1.4 确认不存在：ERROR 1305，交应用层 Shapely 或高德侧】 |
 | 确认不可用 | ST_Intersection 独立函数 | 两多边形交集 | 【V1.4 确认不存在：ERROR 1305，交应用层 Shapely】 |
-| 待实测 | MBR* 函数族（MBRContains 等） | MBR 粗筛 | 【待实测：按 MySQL 兼容推断应存在】 |
+| 确认不可用 | MBR* 函数族（MBRContains 等） | MBR 粗筛 | 【V1.4 确认不存在：ERROR 1305；替代方案 = lon/lat 冗余列 + `KEY(lon,lat)` 做 MBR 预筛，见 §6.3】 |
 
 > **可下推空间算子白名单（V1.4 实测口径，2026-10-15 复测扩充）**：距离 `ST_Distance_Sphere`（米）、`ST_Distance`（度）、圈选 `_ST_Dwithin`（单位度）、布尔关系 `ST_Intersects`/`ST_Contains`/`ST_Within`、缓冲 `ST_Buffer`（度）、`ST_Centroid`、`ST_Area`。交集/合并类多边形运算（`ST_Intersection`/`ST_Union_Agg`）确认不可下推（ERROR 1305）。
 >
-> **空间连接实测结论**：`t_grid JOIN t_poi ON ST_Contains(g,location)` + `GROUP BY` **功能跑通**并可在库内完成聚合；但 EXPLAIN = `NESTED-LOOP JOIN` + 双侧 `TABLE FULL SCAN`，**当前优化器不以 SPATIAL INDEX 驱动连接**——大数据量下需改走「`_ST_Dwithin` 预筛 + 应用层精确归属」或「冗余网格 ID 列 + 普通索引 JOIN」。【已实跑，数据量级待 10 万级复验】
+> **🔴 SPATIAL INDEX 实测结论（10 万级坐实，写 SQL 前第一优先看这条）**：`SPATIAL KEY` 在 V1.4 **完全不参与查询计划**——`_ST_Dwithin` / `ST_Contains` / `ST_Within` / `ST_Intersects`(含 `ST_Buffer`) / `ST_Distance_Sphere` < n / 空间连接，共 7 种谓词形式 + `/*+ INDEX() */` 强制 hint 全部 `TABLE FULL SCAN`；`MBR*` 系列函数不存在（ERROR 1305）；`ANALYZE` 收统计后仍不变（选择性恒按 25% 估）。→ 空间过滤是 **O(N)** 全扫，随数据量线性劣化。**答辩口径：如实说明 + 给绕行方案，绝不宣称"空间索引加速"。**
+>
+> **✅ 已验证的两个绕行方案（仍在库内算，不违反"空间计算不下放 LLM"铁律）**：
+> 1. **MBR 预筛**——冗余 `lon/lat` 双列 + `KEY(lon,lat)`，空间查询固化为「`lon BETWEEN AND lat BETWEEN` 粗筛 + 精确 `ST_*` 复核」两段式：圈选 61–92 ms → **<1 ms**（>60×），KNN 71 → 10 ms（7×）。
+> 2. **冗余归属列 JOIN**——`grid_id` + 普通索引替代 `ST_Contains` 连接：空间连接 **5559 ms → 20 ms（278×）**；回填 10 万行 906 ms，库内 `ST_X/ST_Y` + 算术即可。
+>
+> **空间连接实测结论（10 万级已复验）**：`t_grid JOIN t_poi ON ST_Contains(g,location)` + `GROUP BY` **功能跑通**并可在库内完成聚合；但 EXPLAIN = `NESTED-LOOP JOIN` + 双侧 `TABLE FULL SCAN`，**优化器不以 SPATIAL INDEX 驱动连接**——生产一律走方案 2「冗余网格 ID 列 + 普通索引 JOIN」（实测 `MERGE JOIN` + `TABLE RANGE SCAN idx_poi_grid`）。【已实跑，10 万级复验通过；生产库 2 万级再验：274 ms → 2.2 ms】
 
 ### 6.5 向量能力说明
 
 - ANN 查询三要素：`ORDER BY cosine_distance(col, :qvec) APPROXIMATE LIMIT k`——必须带 `APPROXIMATE/APPROX`（否则不走向量索引也不报错）、必须有 `ORDER BY`+`LIMIT`、`ORDER BY` 仅支持单个向量条件；距离函数必须与索引 distance 匹配；**没有 PG 的 `<=>` 算子**【已实跑通过：EXPLAIN 显示 VECTOR INDEX SCAN 命中】。
 - 版本背景（CE 官方文档口径）：4.3.3 首发向量，HNSW ≤2000 维、仅 l2/inner_product；4.4.0 起 HNSW ≤4096 维、新增 cosine【已查证，research/03 §4.2】。**但 SeekDB 虽内核版本号为 4.3.5.x，cosine HNSW 与 1024 维已实测支持，不受上述 CE 4.3.x 限制。**
-- **SeekDB 实测关键发现**：混合查询执行计划为 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`，filter 内含标量与 `_ST_Dwithin` 空间谓词——即 SeekDB 优化器在向量索引扫描时**自适应预过滤**，比 CE 文档"HNSW 仅召回后过滤"更强，性能兜底更优【已实跑通过，小样本】。
+- **SeekDB 实测关键发现**：混合查询执行计划为 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`，filter 内含标量与 `_ST_Dwithin` 空间谓词——即 SeekDB 优化器在向量索引扫描时**自适应预过滤**，比 CE 文档"HNSW 仅召回后过滤"更强，性能兜底更优【已实跑通过，小样本】。生产库 2 万级复验进一步确认：filter 内**还包含全文 `MATCH` 谓词**并标注 `pushdown_match_filter`，即四模（标量+空间+全文+向量）在一趟索引扫描内完成过滤【详见 §6.6】。
 
 ### 6.6 典型混合查询 SQL
 
 **写法 A：向量驱动（ANN 召回 + 自适应预过滤）**——空间圈大、语义选择性强时，SeekDB 实测跑通的三模混合 SQL（SRID 0，不写 SRID 参数）：
 
 ```sql
--- 【已实跑通过】空间圈选(_ST_Dwithin,单位度) + 标量过滤(cat/status/rating) + 语义向量(cosine APPROXIMATE)
+-- 【已实跑通过·生产库四模】MBR 预筛(lon/lat) + 精确圈选(_ST_Dwithin,单位度)
+--   + 标量过滤(cat/status/rating) + 全文(ngram AND) + 语义向量(cosine APPROXIMATE)
+-- ⚠️ 空间条件必须写成两段式：lon/lat 的 BETWEEN 粗筛在前（走 idx_poi_bbox），
+--    _ST_Dwithin 精确复核在后（否则全表扫描，见 §6.4 空间索引结论）
 SELECT poi_id, name, rating,
-       ROUND(ST_Distance_Sphere(location, ST_GeomFromText('POINT(104.64 28.75)')),0) AS dist_m,
+       ROUND(ST_Distance_Sphere(location, ST_GeomFromText('POINT(104.0817 30.6570)')),0) AS dist_m,
        ROUND(cosine_distance(emb, :qvec),4) AS sem
 FROM dim_poi
 WHERE category_id = 1 AND status = 1 AND rating >= 4.0
-  AND _ST_Dwithin(location, ST_GeomFromText('POINT(104.64 28.75)'), 0.02)  -- 0.02 度≈2km
+  AND lon BETWEEN 104.0682 AND 104.0952      -- ★MBR 预筛：中心 ±0.0135 度 ≈ 1.5 km
+  AND lat BETWEEN 30.6435  AND 30.6705
+  AND _ST_Dwithin(location, ST_GeomFromText('POINT(104.0817 30.6570)'), 0.0135)
+  AND MATCH(name) AGAINST ('+咖啡 +自习' IN BOOLEAN MODE)
 ORDER BY cosine_distance(emb, :qvec) APPROXIMATE
 LIMIT 10;
 ```
 
-实测执行计划（V1.4 形态）：
+实测执行计划（生产库 2 万级，V1.4 形态）：
+
+```text
+|ID|OPERATOR                               |NAME                 |EST.ROWS|EST.TIME(us)|
+|0 |VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)|dim_poi(idx_poi_bbox)|321     |17324       |
+   filter([category_id=1],[lon<=104.0952],[lat>=30.6435],[lat<=30.6705],[lon>=104.0682],
+          [rating>=4.0],[status=1],[_ST_Dwithin(...)],[MATCH(name) AGAINST('+咖啡 +自习')])
+   range_key([lon],[lat],[poi_id]), range(104.0682,30.6435,MIN ; 104.0952,30.6705,MAX)
+```
+
+两点关键：**① 驱动索引自动选为 `idx_poi_bbox`**（去掉 MBR 条件后变为 `idx_poi_cat_stat_rating`，EST.TIME 从 17324 μs 劣化到 86339 μs，优化器预估代价差 5 倍）；**② 全文 `MATCH` 谓词进入了 PRE-FILTER**（`pushdown_match_filter`），不再是召回后过滤。
+
+旧版执行计划（V1.4 小样本形态，保留备查）：
 
 ```text
 |1| └─SUBPLAN FILTER
@@ -747,9 +803,22 @@ ORDER BY cosine_distance(emb, :qvec) APPROXIMATE
 LIMIT 20;
 ```
 
-> 保守写法说明：APPROXIMATE 必须紧跟 `ORDER BY 向量距离函数`，且 ORDER BY 只支持单个向量条件，因此**不写 `ORDER BY (text_score + (1-sem_dist))` 这类表达式排序**（大概率不走索引甚至不解析）。全文 MATCH 作为 WHERE 谓词参与过滤、向量 cosine 单独 ANN 排序。其中 `_ST_Dwithin + 标量 + cosine APPROXIMATE` 三组合【已实跑通过】；全文 MATCH 谓词能否进入 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)` 预过滤（还是退化为先全文召回/两阶段），需 EXPLAIN 实测【待实测】。若需要"全文分+向量分融合排序"，放在场景 Skill 的后端重排步骤（对 SQL 返回的小结果集计算），不写进单条 ANN SQL。
+> 保守写法说明：APPROXIMATE 必须紧跟 `ORDER BY 向量距离函数`，且 ORDER BY 只支持单个向量条件，因此**不写 `ORDER BY (text_score + (1-sem_dist))` 这类表达式排序**（大概率不走索引甚至不解析）。全文 MATCH 作为 WHERE 谓词参与过滤、向量 cosine 单独 ANN 排序。其中 `_ST_Dwithin + 标量 + cosine APPROXIMATE` 三组合【已实跑通过】。
+>
+> **全文 MATCH 能否进入预过滤——【已实测，2026-10-15 生产库坐实：能】**：EXPLAIN 显示 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)` 的 filter 列表内直接包含 `[MATCH(name) AGAINST(...)]` 且标注 `pushdown_match_filter(MATCH(...))`，知识库表同样成立。即全文谓词在向量索引扫描阶段就被下推过滤，**不退化成"先全文召回再两阶段"**。若仍需要"全文分+向量分融合排序"，放在场景 Skill 的后端重排步骤（对 SQL 返回的小结果集计算），不写进单条 ANN SQL。
 
-**EXPLAIN 验证清单**（更新）：① `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)` 已在 3–5 行小样本确认；② 大数据量（10 万+）下 SPATIAL INDEX 与 HNSW 的真实命中——当前样本走 FULL SCAN 属正常；③ 全文+向量+空间组合计划；④ 空间连接/聚合是否走索引。②③④均列【待实测】。
+**EXPLAIN 验证清单**（更新）：① `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)` ✅ 小样本与生产库 2 万级均已确认；② 10 万级 SPATIAL INDEX 与 HNSW 的真实命中 ✅ 已完成（见《压测报告-10万级.md》）：HNSW 命中且召回 10/10，**SPATIAL INDEX 确认不命中，改用冗余列绕行**；③ 全文+向量+空间组合计划 ✅ 已确认，全文进入 PRE-FILTER；④ 空间连接/聚合是否走索引 ✅ 已确认：`ST_Contains` 连接不走索引，改 `grid_id` 冗余列后走 `MERGE JOIN` + `TABLE RANGE SCAN`。
+
+**生产库四模闭环实测（2 万 POI，春熙路 1.5 km，查询"安静可自习的咖啡馆"）**【已实跑，2026-10-15】：
+
+| 项 | 结果 |
+|---|---|
+| 返回 TOP10 | 全部为"XX自习咖啡"，`dist_m` 113–1378 m（均在 1.5 km 圈内），`sem_dist` 0.466→0.786 递增 |
+| 耗时 | 四模（含 MBR）**24.9 ms** / 四模（去 MBR）27.6 ms / 纯向量 ANN 7.3 ms（min，5 次重复） |
+| 对照实验 | 纯向量 ANN（无任何过滤）TOP10 的距离为 582–18731 m，**仅 1 条落在圈内** → 证明空间与全文过滤在索引扫描阶段生效，而非召回后过滤 |
+| 五模（+JSON） | `attrs->'$.parking' = true AND attrs->'$.wifi' = true` 可用，返回 3 条 |
+
+> 说明：四模比纯向量慢（24.9 vs 7.3 ms）是预过滤回表判断的正常代价，换来的是**结果集直接满足全部约束**；且此时数据规模仅 2 万，10 万级下 MBR 预筛的收益会显著放大（压测圈选 61–92 ms → <1 ms）。
 
 **两种写法的选型决策**：SeekDB 既然有 `ADAPTIVE PRE-FILTER`，常规场景直接用写法 A 一条 SQL 即可，优化器自适应预过滤；只有当空间圈极小、候选极少（强过滤会把向量召回结果几乎清空）时，才显式降级到写法 B 两阶段（先空间/标量物化小候选集，再向量重排）。选择结果连同 EXPLAIN 计划一并记入状态，便于答辩复现。写法 B 同时是"大数据量下预过滤算子行为是否如小样本"的兜底（见第 13 章）。
 
@@ -758,7 +827,14 @@ LIMIT 20;
 ### 6.7 空间计算下推方案
 
 - **空间连接下推**：候选铺位 JOIN 客流网格/竞品，连接条件写 `ST_Contains(grid.grid_poly, store.location)` 或 `_ST_Dwithin(store.location, comp.location, d)`，由 OB 连接算子完成【写法已查证谓词；是否有空间感知 join 优化待 EXPLAIN 实测】。
-- **空间聚合下推**：`SELECT grid_id, COUNT(*), AVG(flow_cnt) FROM fact_store s JOIN fact_traffic_grid g ON ST_Contains(g.grid_poly, s.location) GROUP BY grid_id`——百米网格聚合格式。
+- **空间聚合下推**：百米网格聚合格式。⚠️ 生产一律用**冗余归属列**而非 `ST_Contains`（后者全扫，实测 274 ms vs 2.2 ms）：
+  ```sql
+  SELECT g.grid_id, SUM(g.flow_cnt) AS flow, COUNT(p.poi_id) AS poi_cnt, ROUND(AVG(p.rating),2) AS avg_rating
+  FROM fact_traffic_grid g LEFT JOIN dim_poi p ON p.grid_id = g.grid_id AND p.category_id = 1
+  WHERE g.time_bucket = 'workday_evening' AND g.grid_id IN (...)
+  GROUP BY g.grid_id ORDER BY flow DESC LIMIT 10;   -- 生产库 25 网格实测 7.4 ms
+  ```
+  `ST_Contains` 版本仅作功能对等验证保留（结果集已实测与冗余列版本**逐行一致**）。
 - **等时圈**：多边形由高德等时圈 API 返回（GeoJSON），转 WKT 后作为 `ST_Contains(:isochrone_poly, s.location)` 参数，在 OB 内批量筛选落在可达域内的候选——OB 无路网路由能力，不自行算等时圈。
 - **点查区块（point-in-polygon）**：`SELECT district FROM fact_district WHERE ST_Contains(district_poly, :pt)`——对应高德 PDF P31 派单点查区块场景，是本地大规模空间计算典型（research/04 §附录）。
 - **明确不能下推（V1.4 确认）**：`ST_Intersection`、`ST_Union_Agg` 均报 ERROR 1305 函数不存在——交集/合并类多边形运算交应用层（Shapely）或高德侧完成。替代写法：用 `GROUP BY + ST_Contains` 连接聚合，真正需要 union 可视化时在前端 Loca 合并 GeoJSON。
@@ -1057,8 +1133,12 @@ GeoMind/
 │   │   └── contracts/          #   MapSpec/Event/Feedback 的 Pydantic 模型
 │   ├── db/
 │   │   ├── connection.py
-│   │   └── migrations/          # 增量建表 migration（新场景只加不改）
+│   │   └── migrations/
+│   │       └── 001_init_schema.sql   # ★生产 DDL 权威源（6 表，含 lon/lat/grid_id 冗余列与三类索引）
 │   ├── etl/                     # 数据管线：POI/客流/轨迹导入与 embedding
+│   │   ├── seed_cd.py           #   ★样例数据生成器（成都主城，合成向量可替换真模型）
+│   │   ├── gen_verify.py        #   ★生成 verify_prod.sql（四模闭环 + 空间连接 + 状态读写）
+│   │   └── data/                #   生成物（*.sql / qvec_*.txt），已 gitignore
 │   └── llm/                     # LLM 网关抽象（豆包/DeepSeek）
 ├── web/                         # 正式版单页工作台（可摘除，详见第 9 章）
 │   ├── src/{views,components,layers,api,stores}
@@ -1094,7 +1174,7 @@ GeoMind/
 **阶段 0（赛题发布前 · 地基，可验收 checklist）**
 - [ ] Docker 版 SeekDB V1.4.0 实例起通（quay 镜像、127.0.0.1:2881、root 空密码），验证五模复验与 V1.3 回滚路径（§6.1）；不再导入 SRS 元数据（本机 SRS 仅 SRID 0）。
 - [ ] 能力实测清单（已据实测报告部分完成）：SPATIAL INDEX 与 cosine HNSW 建索引、三模混合查询 EXPLAIN 见 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`（§6.6）；大数据量索引命中待补测。
-- [ ] 按 6.3 建好全部 DDL（去 SRID、含 ngram 全文索引），灌入一个城市样例 POI/网格数据（复用 TravelAssist 管道）。
+- [x] 按 6.3 建好全部 DDL（去 SRID、含 ngram 全文索引），灌入一个城市样例 POI/网格数据 —— **2026-10-15 已完成**：`backend/db/migrations/001_init_schema.sql` 实跑通过（6 表 7 索引 0 错误），`backend/etl/seed_cd.py` 灌入成都主城 2 万 POI（含 2 万 × VECTOR(1024)）+ 800 铺位 + 2000 网格 ×2 时段 + 60 知识切片 + 1 条 Spatial State；四模混合检索最小闭环已点亮，见《开发进度.md》验收锚点 #8。
 - [ ] 落地 Skill 基类 + Registry + MCP Server（Streamable HTTP）骨架，`tools/list` 可见。
 - [ ] 落地 Spatial State 模型 + LangGraph 7 步骨架（checkpointer + interrupt）。
 - [ ] 落地 Map Spec 渲染器（前端高德 JS+Loca）。
