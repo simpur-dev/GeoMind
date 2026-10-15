@@ -67,7 +67,7 @@ docker run -d --name seekdb --restart unless-stopped `
 | 能力 | 语法 | 结果 |
 | --- | --- | --- |
 | 空间类型 | `POINT NOT NULL`（SRID 0）、`POLYGON` | ✅ |
-| 空间索引 | `SPATIAL KEY idx (col)` | ✅ |
+| 空间索引 | `SPATIAL KEY idx (col)` | ⚠️ **能建、可见（`SHOW INDEX` = SPATIAL/available），但 10 万级实测不参与任何查询计划**——7 种谓词形式 + `INDEX` hint 全部 `TABLE FULL SCAN`；`MBR*` 系列函数不存在（1305）。详见《压测报告-10万级.md》§4.1 |
 | 空间构造/输出 | `ST_GeomFromText`、`ST_AsText`、`ST_X/Y`、`ST_SRID` | ✅ |
 | 球面距离 | `ST_Distance_Sphere(g1,g2)` 返回**米**（SRID 0 下也正确） | ✅（A=0/B=1478.8m/C=1642445m） |
 | 距离圈选 | `_ST_Dwithin(g1,g2,d)`（OB 私有，**d 单位是度**） | ✅ |
@@ -181,10 +181,10 @@ mysqldump -h 127.0.0.1 -P 2881 -uroot --ssl-mode=DISABLED --skip-triggers --hex-
 
 ## 8. 待办（阶段 0 收尾 / 后续）
 
-- [ ] 用 10 万级以上数据验证 SPATIAL INDEX 与 HNSW 的真实命中与召回/延迟（当前 3~5 行样本走全表属正常）
+- [x] **10 万级索引命中：已实测（2026-10-15）**——见《压测报告-10万级.md》。结论：① **SPATIAL INDEX 不命中**（7 种谓词 + hint 均全扫）→ 空间过滤 O(N)，须改用「lon/lat 冗余列 + 复合 B-tree 做 MBR 预筛」（>60×）或「归属冗余列 + 普通索引 JOIN」（278×）；② **HNSW 命中**，10 万 × 1024 维 ANN 61 ms vs 精确 123 ms，召回 10/10；③ 三模/四模混合走 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`（20–50 ms）。该待办关闭
 - [x] **SRID 4326 注册：已实测不可行**——`CREATE SPATIAL REFERENCE SYSTEM 4326 …` 报 **ERROR 1064 语法不支持**（OB 未实现该语句），导入 `spatial_ref_sys` 亦无内置入口。结论固化：**DDL 一律 SRID 0 + WGS84 经纬度存值**，该待办关闭
 - [x] **空间连接下推：功能已跑通**——`t_grid JOIN t_hybrid ON ST_Contains(g,location)` + `GROUP BY` 实测返回正确聚合（grid1=3 均值 4.43 / grid2=1 / grid3=1）
-- [ ] 空间连接**索引加速未验证**：上述连接 EXPLAIN = `NESTED-LOOP JOIN` + 两侧 `TABLE FULL SCAN`，**优化器未选 SPATIAL INDEX 驱动连接**；需 10 万级数据复验（若仍全扫，空间聚合改为「`_ST_Dwithin` 预筛 + 应用层精确归属」或「网格 ID 冗余列 + 普通索引 JOIN」）
+- [x] **空间连接加速：已实测（2026-10-15）**——10 万点 × 100 网格全量聚合 **5559 ms**（NL JOIN + 双侧全扫）；改「网格 ID 冗余列 + 普通索引 JOIN」后 **20 ms（278×）**，回填 10 万行仅 906 ms（库内 `ST_X`/`ST_Y` + 算术完成）。**定案采用冗余列方案**，该待办关闭
 - [ ] 交集/合并类多边形运算放到应用层（Shapely）或高德，勿在 SeekDB 调用 `ST_Intersection/ST_Union_Agg`
 - [ ] 项目正式 DDL 以《GeoMind 架构设计文档》§6.3 为准，禁止携带 `REPLICA_NUM` 等分布式选项（`backup/` 已清理，迁移期脚本不再作为模板来源）
 - [ ] 据本文把《GeoMind 架构设计文档》第 6 章与部署章节统一更新为 **SeekDB V1.4.0 / Docker**

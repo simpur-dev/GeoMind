@@ -29,3 +29,6 @@ desktop.ini
 # ---- 日志 ----
 *.log
 logs/
+
+# ---- 压测生成数据（体积大，脚本可再生成） ----
+scripts/bench/data/
