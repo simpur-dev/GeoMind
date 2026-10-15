@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-import sys, io
 from pypdf import PdfReader
 
 PDF = r"E:\2026ob_projects\GeoMind\高德开放平台整体介绍+AI+空间智能应用 202608.pdf"
@@ -20,11 +18,11 @@ for i, page in enumerate(reader.pages):
     per_page_stats.append((i + 1, len(t)))
     lines.append(f"\n===== PAGE {i+1} =====\n{t}\n")
 
-with io.open(OUT, "w", encoding="utf-8") as f:
+with open(OUT, "w", encoding="utf-8") as f:
     f.write(f"TOTAL_PAGES={n}\n")
     f.write("".join(lines))
 
 # stats
-short = [(p, l) for p, l in per_page_stats if l < 80]
+short = [(p, n) for p, n in per_page_stats if n < 80]
 print("PAGES_WITH_LITTLE_TEXT (<80 chars):", short)
 print("WROTE:", OUT)

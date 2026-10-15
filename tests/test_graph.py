@@ -15,7 +15,8 @@ class TestGraph:
         assert all(c["dist_m"] <= 1500 for c in st["candidates"])
         assert st["aggs"]
         assert st["decision"]["summary"]
-        assert {layer["kind"] for layer in st["map_spec"]["layers"]} >= {"points", "heatmap"}
+        assert {layer["kind"] for layer in st["map_spec"]["layers"]} >= {"poi", "heatmap"}
+        assert st["map_spec"]["map_view"]["center"] is not None
         assert st["feedback"]["written"]
 
     def test_interrupt_then_resume(self, skill_ctx, db_ok):
@@ -39,3 +40,18 @@ class TestGraph:
         r = run_query("帮我在建设路附近选个咖啡馆位置", skill_ctx, thread_id="pytest-scene")
         assert not r["interrupted"]
         assert r["state"]["intent"]["scene"] == "site_selection"
+
+    def test_polygon_gesture_translates_center(self):
+        """框选手势 → L1 翻译出质心+外接半径（网格聚合层的圆路径依赖它）。"""
+        from backend.brain.intent import RuleIntentParser
+
+        wkt = "POLYGON((104.06 30.64, 104.10 30.64, 104.10 30.67, 104.06 30.67, 104.06 30.64))"
+        r = RuleIntentParser().parse("咖啡馆", gesture={"polygon_wkt": wkt})
+        slots = r.slots
+        assert slots["polygon_wkt"] == wkt
+        assert slots["center"] == [104.08, 30.655]          # 顶点均值质心
+        assert 2400 < slots["radius_m"] < 2700              # ≈ 质心到框角的外接半径
+        assert not r.question                                # 手势给了空间约束，不追问
+        # 非法 WKT：不派生 center（回落到文本/追问路径），不抛异常
+        r2 = RuleIntentParser().parse("咖啡馆", gesture={"polygon_wkt": "POLYGON((bad))"})
+        assert "center" not in r2.slots or r2.slots.get("center_name") != "框选区域"

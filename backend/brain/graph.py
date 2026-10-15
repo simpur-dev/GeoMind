@@ -19,11 +19,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from backend.api.contracts.map_spec import LayerSource, LayerSpec
+from backend.api.sse_bus import emit
 from backend.brain.intent import IntentResult, RuleIntentParser
 from backend.llm.gateway import LLMMessage, get_gateway
 from backend.skills.base import SkillContext
 from backend.skills.registry import SkillRegistry
-from backend.state.models import Evidence, LayerSpec, SpatialState, StepNode
+from backend.state.models import Evidence, SpatialState, StepNode
 from backend.state.repository import StateRepository
 
 GRAPH_NODES = ["intent", "constraints", "candidates", "spatial_join", "decide", "render", "feedback"]
@@ -52,22 +54,25 @@ class BrainState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 # 纯节点（不依赖 services，可独立测试）
 # ---------------------------------------------------------------------------
-def _intent_node(state: BrainState) -> BrainState:
+def _intent_node(state: BrainState, ctx: SkillContext) -> BrainState:
     parser = RuleIntentParser()
     result: IntentResult = parser.parse(state.get("query", ""), state.get("gesture"))
     if result.question:
         # HITL：中断并等待用户补充（恢复时经 Command(resume=...) 传入）
+        emit(ctx, "interrupt.required", {"question": result.question})
         answer = interrupt({"question": result.question, "slots": result.slots,
                             "confidence": result.confidence})
         if isinstance(answer, str) and answer.strip():
             merged = state["query"] + " " + answer.strip()
             result = parser.parse(merged, state.get("gesture"))
+    emit(ctx, "intent.updated", {"slots": result.slots, "scene": result.scene,
+                                 "confidence": result.confidence})
     return {"intent": result.to_dict()}
 
 
-def _constraints_node(state: BrainState) -> BrainState:
+def _constraints_node(state: BrainState, ctx: SkillContext) -> BrainState:
     slots = (state.get("intent") or {}).get("slots", {})
-    return {"spec": {
+    spec = {
         "center": tuple(slots["center"]) if slots.get("center") else None,
         "radius_m": slots.get("radius_m"),
         "polygon_wkt": slots.get("polygon_wkt"),
@@ -77,10 +82,12 @@ def _constraints_node(state: BrainState) -> BrainState:
         "query_text": slots.get("query_text"),
         "time_bucket": "workday_evening",
         "limit": 10,
-    }}
+    }
+    emit(ctx, "constraints.updated", spec)
+    return {"spec": spec}
 
 
-def _decide_node(state: BrainState) -> BrainState:
+def _decide_node(state: BrainState, ctx: SkillContext) -> BrainState:
     llm = get_gateway()
     aggs = state.get("aggs") or []
     cands = state.get("candidates") or []
@@ -91,7 +98,9 @@ def _decide_node(state: BrainState) -> BrainState:
              f"（flow={top.get('flow')}，POI {top.get('poi_cnt')} 个，"
              f"评分 {top.get('avg_rating')}）")
     text = llm.chat([LLMMessage(role="user", content=f"FEATURES: {feats}")], temperature=0.0)
-    return {"decision": {"summary": text, "top_grid": top}}
+    decision = {"summary": text, "top_grid": top}
+    emit(ctx, "decision.updated", decision)
+    return {"decision": decision}
 
 
 # ---------------------------------------------------------------------------
@@ -100,35 +109,51 @@ def _decide_node(state: BrainState) -> BrainState:
 def build_graph(ctx: SkillContext) -> Any:
     """装配 7 步图。ctx.services 承载 L4 服务（ob / query_builder / embedding / state_repo）。"""
 
-    def candidates(state: BrainState) -> BrainState:
+    def candidates(state: BrainState, ctx: SkillContext) -> BrainState:
         from backend.skills.atomic.multi_modal_search import MultiModalSearchInput
 
         spec = state.get("spec") or {}
+        emit(ctx, "tool.start", {"skill": "multi_modal_search"})
         out = ctx.tools["multi_modal_search"].run(MultiModalSearchInput(
             center=spec.get("center"), radius_m=spec.get("radius_m"),
             polygon_wkt=spec.get("polygon_wkt"), category_id=spec.get("category_id"),
             min_rating=spec.get("min_rating"), keywords=spec.get("keywords") or [],
             query_text=spec.get("query_text"), limit=spec.get("limit") or 10,
         ), ctx)
-        return {"candidates": [c.model_dump() for c in out.candidates]}
+        emit(ctx, "tool.end", {"skill": "multi_modal_search", "elapsed_ms": out.elapsed_ms,
+                                 "degraded": out.degraded})
+        # mode="json"：rating/avg_rating 是 Decimal，必须在此转成 float——
+        # 这些 dict 会进 SSE 事件（decision.updated 的 top_grid 等），
+        # 生成器里 json.dumps 不认 Decimal，会把整条事件流打断（实测踩坑）。
+        return {"candidates": [c.model_dump(mode="json") for c in out.candidates]}
 
-    def spatial_join(state: BrainState) -> BrainState:
+    def spatial_join(state: BrainState, ctx: SkillContext) -> BrainState:
         from backend.skills.atomic.spatial_join_agg import SpatialJoinAggInput
 
         spec = state.get("spec") or {}
+        emit(ctx, "tool.start", {"skill": "spatial_join_agg"})
         out = ctx.tools["spatial_join_agg"].run(SpatialJoinAggInput(
             center=spec.get("center"), radius_m=spec.get("radius_m"),
             time_bucket=spec.get("time_bucket") or "workday_evening",
             category_id=spec.get("category_id"), limit=100,
         ), ctx)
-        return {"aggs": [a.model_dump() for a in out.aggs]}
+        emit(ctx, "tool.end", {"skill": "spatial_join_agg", "elapsed_ms": out.elapsed_ms})
+        return {"aggs": [a.model_dump(mode="json") for a in out.aggs]}
 
-    def render(state: BrainState) -> BrainState:
+    def render(state: BrainState, ctx: SkillContext) -> BrainState:
         scene = ctx.tools.get("site_selection")
-        spec = scene.render_spec(ctx) if scene is not None else {"version": "1.0", "layers": []}
+        if scene is not None:
+            spec = scene.render_spec(ctx, state.get("session_id", ""), state)
+        else:
+            spec = {"version": "1.0", "layers": [], "map_view": None}
+        emit(ctx, "layer.update", {"layers": [ly.get("id") for ly in spec.get("layers", [])],
+                                     "stale": [ly.get("id") for ly in spec.get("layers", [])
+                                               if ly.get("status") == "stale"]})
+        if spec.get("map_view"):
+            emit(ctx, "map.view", spec["map_view"])
         return {"map_spec": spec}
 
-    def feedback(state: BrainState) -> BrainState:
+    def feedback(state: BrainState, ctx: SkillContext) -> BrainState:
         """反馈回流：查询写入 knowledge_doc（长期记忆，架构 §3.2）+ 状态落库。"""
         ob = ctx.services.ob
         query = state.get("query", "")
@@ -146,18 +171,25 @@ def build_graph(ctx: SkillContext) -> Any:
             try:
                 st = state_to_spatial_state(state["session_id"], "site_selection", state)
                 repo.save(st)
+                emit(ctx, "state.delta", {"version": st.version, "scene": st.scene})
             except Exception:
                 pass
         return {"feedback": {"written": bool(query)}}
 
+    def _bind(fn: Any) -> Any:
+        """把 (state, ctx) 节点适配成 StateGraph 的 (state) 签名。"""
+        def node(state: BrainState) -> BrainState:
+            return fn(state, ctx)
+        return node
+
     g: StateGraph = StateGraph(BrainState)
-    g.add_node("intent", _intent_node)
-    g.add_node("constraints", _constraints_node)
-    g.add_node("candidates", candidates)
-    g.add_node("spatial_join", spatial_join)
-    g.add_node("decide", _decide_node)
-    g.add_node("render", render)
-    g.add_node("feedback", feedback)
+    g.add_node("intent", _bind(_intent_node))
+    g.add_node("constraints", _bind(_constraints_node))
+    g.add_node("candidates", _bind(candidates))
+    g.add_node("spatial_join", _bind(spatial_join))
+    g.add_node("decide", _bind(_decide_node))
+    g.add_node("render", _bind(render))
+    g.add_node("feedback", _bind(feedback))
     for a, b in zip(GRAPH_NODES, GRAPH_NODES[1:], strict=False):
         g.add_edge(a, b)
     g.add_edge(GRAPH_NODES[-1], END)
@@ -203,8 +235,10 @@ def state_to_spatial_state(session_id: str, scene: str, brain: Any) -> SpatialSt
         session_id=session_id, scene=scene, version=1,
         slots=(brain.get("intent") or {}).get("slots", {}),
         steps=[StepNode(id=n, skill=n, status="done") for n in GRAPH_NODES],
-        layers=[LayerSpec(id="l_candidates", kind="points", data_ref="candidates"),
-                LayerSpec(id="l_heat", kind="heatmap", data_ref="fact_traffic_grid")],
+        layers=[LayerSpec(id="l_candidates", kind="poi", data_ref="candidates",
+                          source=LayerSource(href="/api/sessions/x/layers/l_candidates")),
+                LayerSpec(id="l_heat", kind="heatmap", data_ref="fact_traffic_grid",
+                          source=LayerSource(href="/api/sessions/x/layers/l_heat"))],
         evidence=[Evidence(type="sql", ref="multi_modal_search", note="四模混合检索")],
     )
 

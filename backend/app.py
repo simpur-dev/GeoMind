@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from backend.api.sse_bus import get_bus
 from backend.config import Settings, get_settings
 from backend.db.connection import OBConnection
 from backend.embeddings import get_provider
@@ -22,6 +23,7 @@ def build_services(settings: Settings | None = None) -> ServiceBundle:
         query_builder=QueryBuilder(ob, s),
         embedding=get_provider(s),
         state_repo=StateRepository(ob),
+        events=get_bus(),
     )
 
 

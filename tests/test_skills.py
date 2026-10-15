@@ -126,10 +126,18 @@ class TestSiteSelectionScene:
                 assert n["skill"] in tools
 
     def test_render_spec_valid(self, skill_ctx):
-        spec = skill_ctx.tools["site_selection"].render_spec(skill_ctx)
+        """render_spec 必须产出架构 §9.3 完整形态（经 contracts 模型校验）。"""
+        spec = skill_ctx.tools["site_selection"].render_spec(
+            skill_ctx, "pytest-session",
+            {"spec": {"center": [104.0817, 30.657], "radius_m": 1500}})
         assert spec["version"] == "1.0"
         kinds = {layer["kind"] for layer in spec["layers"]}
-        assert {"points", "heatmap"} <= kinds
+        assert {"poi", "heatmap"} <= kinds
+        # 架构 §9.3：source.href 指向后端 GeoJSON 端点；map_view 与 panels 齐备
+        for layer in spec["layers"]:
+            assert layer["source"]["href"].startswith("/api/sessions/")
+        assert spec["map_view"]["center"] is not None
+        assert {p["kind"] for p in spec["panels"]} == {"ranking", "metrics"}
 
     def test_run_end_to_end(self, skill_ctx, db_ok):
         out = skill_ctx.tools["site_selection"].run(SiteSelectionInput(
@@ -137,7 +145,7 @@ class TestSiteSelectionScene:
             keywords=["咖啡"], query_text="安静可自习的咖啡馆"), skill_ctx)
         assert out.candidates
         assert out.summary
-        assert {layer["kind"] for layer in out.layers} >= {"points", "heatmap"}
+        assert {layer["kind"] for layer in out.layers} >= {"poi", "heatmap"}
         assert out.evidence
 
 

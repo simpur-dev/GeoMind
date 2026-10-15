@@ -78,8 +78,13 @@ class SpatialSkill(ABC, Generic[InT, OutT]):
         """决策综合：LLM 仅消费决策特征，输出可解释结论。默认实现可被子类覆盖。"""
         raise NotImplementedError
 
-    def render_spec(self, ctx: SkillContext) -> dict:
-        """把状态结果转成声明式 Map Spec 图层 JSON。"""
+    def render_spec(self, ctx: SkillContext, session_id: str = "",
+                    state: dict[str, Any] | None = None) -> dict:
+        """把状态结果转成声明式 Map Spec 图层 JSON（架构 §9.3）。
+
+        session_id 供 source.href 回指本会话的 GeoJSON 端点；state 是图执行态
+        （取 spec.center 等渲染镜头参数）。默认参数保持与旧签名兼容。
+        """
         raise NotImplementedError
 
     # ------------------------------------------------------------------

@@ -1,0 +1,7 @@
+/* 全局基础样式：只做 reset 与字体，组件样式一律 scoped 内聚。 */
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; padding: 0; height: 100%; }
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

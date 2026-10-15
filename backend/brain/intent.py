@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -49,6 +50,39 @@ TAG_WORDS: list[str] = ["安静", "静谧", "静音", "清净", "自习", "学�
 _SCENE_SITE = ("选址", "开在", "开店", "铺位", "门面", "推荐位置", "适合开",
                "选个", "位置", "哪儿开", "哪里开", "合适", "选址点")
 _RADIUS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(公里|千米|km|米|m)", re.I)
+_WKT_RING_RE = re.compile(r"\(\((.*)\)\)", re.S)
+_RING_PAIR_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)")
+
+
+def _flat_dist_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """平面近似距离（米）。演示城市尺度（<0.5°）误差可忽略。"""
+    dx = (lon2 - lon1) * 111_320 * math.cos(math.radians(lat1))
+    dy = (lat2 - lat1) * 110_540
+    return math.hypot(dx, dy)
+
+
+def polygon_center_radius(wkt: str) -> tuple[tuple[float, float], float] | None:
+    """POLYGON WKT → (顶点均值质心, 外接半径米)。
+
+    L1 手势翻译的一部分（架构 §2.2）：框选是显式空间约束，但网格聚合层
+    （spatial_join_agg）只走 grid_ids_in_radius 圆路径（压测验证过的写法），
+    因此把手势多边形翻译为「质心 + 外接半径」。候选层仍用 ST_Contains
+    多边形精确约束；外接半径保证圆 ⊇ 多边形，两段式 WHERE 下圆约束
+    不会收紧多边形语义。
+    """
+    m = _WKT_RING_RE.search(wkt)
+    if not m:
+        return None
+    pts = [(float(x), float(y))
+           for x, y in _RING_PAIR_RE.findall(m.group(1))]
+    if len(pts) >= 2 and pts[0] == pts[-1]:
+        pts = pts[:-1]  # 去掉闭合重复顶点，避免质心被加权偏移
+    if len(pts) < 3:
+        return None
+    lon = sum(p[0] for p in pts) / len(pts)
+    lat = sum(p[1] for p in pts) / len(pts)
+    radius = max(_flat_dist_m(lon, lat, x, y) for x, y in pts)
+    return (lon, lat), max(radius, 100.0)
 
 
 @dataclass
@@ -127,17 +161,30 @@ class RuleIntentParser:
             score += 0.1
 
         # 6) 手势约束（架构 §2.2 L1 手势约束翻译器的结构化产物）
+        #    框选/拖拽是用户显式动作：polygon_wkt / gesture center 本身就是
+        #    空间约束，权重与文本地点词同级（0.25-0.3），且不再触发
+        #    "要查哪个区域" 追问（已实测踩坑：画了圈还被问区域）。
+        gesture_spatial = False
         if gesture:
             if gesture.get("center"):
                 center = tuple(gesture["center"])
                 slots["center_name"] = slots.get("center_name", "地图手势")
                 score += 0.2
+                gesture_spatial = True
             if gesture.get("radius_m"):
                 slots["radius_m"] = int(gesture["radius_m"])
                 score += 0.1
             if gesture.get("polygon_wkt"):
                 slots["polygon_wkt"] = gesture["polygon_wkt"]
-                score += 0.2
+                score += 0.3
+                gesture_spatial = True
+                # 框选即空间约束：翻译出质心+外接半径供网格聚合层使用，
+                # 并覆盖文本地点 center（手势是显式用户动作，优先级最高）
+                derived = polygon_center_radius(gesture["polygon_wkt"])
+                if derived is not None:
+                    center = derived[0]
+                    slots["center_name"] = "框选区域"
+                    slots["radius_m"] = int(derived[1])
 
         # 7) 全文关键词 = 类目词（名称里一定出现）；语义文本 = 原始 query（含属性词）
         if "category_word" in slots:
@@ -153,9 +200,17 @@ class RuleIntentParser:
         result = IntentResult(scene=scene, slots=slots, confidence=round(min(score, 1.0), 2), hits=hits)
 
         # 8) 信息不足 → 追问（不猜测）
-        if center is None:
+        #    充分性判据 = 空间约束（center 或 polygon）∩ 检索目标（类目词 /
+        #    语义标签词 / 选址场景词）。置信度阈值只对纯文本信号兜底；
+        #    手势已显式给空间约束时不追问（用户意图已明确）。
+        has_spatial = center is not None or bool(slots.get("polygon_wkt"))
+        has_target = bool(slots.get("category_word") or keywords or scene == "site_selection")
+        if not has_spatial:
             result.confidence = min(result.confidence, 0.5)
             result.question = "要查哪个区域？可以说「春熙路附近」「建设路 1 公里」或直接在地图上框选。"
-        elif result.confidence < self.s.intent_confidence_threshold:
+        elif not has_target:
+            result.confidence = min(result.confidence, 0.4)
+            result.question = "想找哪类点位？例如「咖啡馆」「火锅」「便利店」。"
+        elif result.confidence < self.s.intent_confidence_threshold and not gesture_spatial:
             result.question = "想找哪类点位？例如「咖啡馆」「火锅」「便利店」。"
         return result

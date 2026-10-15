@@ -98,7 +98,7 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
         # s3 打分（纯 Python 对 SQL 返回的小结果集计算，不写进 ANN SQL）
         cands = self._score(s1, s2)
         summary = self.synthesize_summary(cands)
-        layers = self.render_spec(ctx)["layers"] if cands else []
+        layers = self.render_spec(ctx, ctx.session_id)["layers"] if cands else []
         evidence = [
             {"type": "sql", "ref": "multi_modal_search", "note": "四模混合检索"},
             {"type": "sql", "ref": "spatial_join_agg", "note": "网格聚合（grid_id JOIN）"},
@@ -142,17 +142,46 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
                 f"竞品密度 {self.s.score_weight_competition}）。")
 
     # ------------------------------------------------------------------
-    def render_spec(self, ctx: SkillContext) -> dict:
-        """Map Spec：候选点 + 客流热力两种 kind（路线图 #6 对齐）。"""
-        state = ctx.state or {}
-        return {
-            "version": "1.0",
-            "layers": [
-                {"id": "l_candidates", "kind": "points", "data_ref": "candidates",
-                 "style": {"radius": 6, "color": "#1677FF"}, "status": "ready",
-                 "derived_from": ["s1_candidates"]},
-                {"id": "l_heat", "kind": "heatmap", "data_ref": "fact_traffic_grid",
-                 "style": {"radius": 24}, "status": "ready", "derived_from": ["s2_spatial_join"]},
-            ],
-            "viewport": state.get("viewport"),
-        }
+    def render_spec(self, ctx: SkillContext, session_id: str = "",
+                    state: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Map Spec（架构 §9.3 完整形态，经 contracts 模型校验后返回）。
+
+        坐标系统一为 GCJ-02（高德底图）；WGS84 → GCJ-02 转换在 geo 模块。
+        layers 的 source.href 指向后端 GeoJSON 端点，前端只渲染不计算。
+        """
+        from backend.api.contracts.map_spec import (
+            LayerSource,
+            LayerSpec,
+            MapSpec,
+            MapView,
+            PanelSpec,
+        )
+        from backend.api.geo import viewport_from_center
+
+        st = state or {}
+        spec = st.get("spec") or {}
+        center = tuple(spec["center"]) if spec.get("center") else (104.0817, 30.657)
+        radius_m = float(spec.get("radius_m") or 1500)
+
+        href = f"/api/sessions/{session_id}/layers"
+        layers = [
+            LayerSpec(id="l_candidates", kind="poi",
+                      source=LayerSource(href=f"{href}/l_candidates", type="geojson"),
+                      data_ref="candidates",
+                      style={"radius": 6, "color": "#1677FF", "labelBy": "name"},
+                      interactions=["click", "hover"], status="ready",
+                      derived_from=["s1_candidates"]),
+            LayerSpec(id="l_heat", kind="heatmap",
+                      source=LayerSource(href=f"{href}/l_heat", type="geojson"),
+                      data_ref="fact_traffic_grid",
+                      style={"radius": 24, "opacity": 0.6, "valueKey": "flow"},
+                      interactions=[], status="ready",
+                      derived_from=["s2_spatial_join"]),
+        ]
+        panels = [
+            PanelSpec(id="p_ranking", kind="ranking", data_ref="candidates", title="候选排名"),
+            PanelSpec(id="p_metrics", kind="metrics", data_ref="decision.metrics", title="关键指标"),
+        ]
+        map_spec = MapSpec(version="1.0", map_view=MapView(**viewport_from_center(center, radius_m)),
+                           layers=layers, panels=panels)
+        return map_spec.model_dump(mode="json")

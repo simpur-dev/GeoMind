@@ -19,6 +19,7 @@ class ServiceBundle(BaseModel):
     embedding: Any                # EmbeddingProvider
     amap: Any = None              # AmapGateway（无 key 时降级为库内兜底）
     state_repo: Any = None        # StateRepository（L2 图节点持久化用）
+    events: Any = None            # EventBus（SSE 事件总线，backend/api/sse_bus.py）
 
 
 __all__ = ["ServiceBundle"]

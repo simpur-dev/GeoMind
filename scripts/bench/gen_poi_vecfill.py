@@ -13,10 +13,24 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gen_poi import (SEED, N_CLUSTER, DIM, SEG, SEG_DIM, POOL_PER_SEG, LON_MIN, LON_MAX,
-                     LAT_MIN, LAT_MAX, CITY_CODE, CATEGORIES, PREFIX, MID, BRAND,
-                     build_segments, gen_vector, esc)
 import random
+
+from gen_poi import (
+    BRAND,
+    CATEGORIES,
+    CITY_CODE,
+    LAT_MAX,
+    LAT_MIN,
+    LON_MAX,
+    LON_MIN,
+    MID,
+    N_CLUSTER,
+    PREFIX,
+    SEED,
+    build_segments,
+    esc,
+    gen_vector,
+)
 
 N_FILL = 80_000
 BATCH = 500

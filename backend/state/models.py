@@ -2,6 +2,10 @@
 
 字段与架构文档 §4.1 顶层字段表一一对应；JSON 形态与生产库
 scene_solution.state 列互通（已由 backend/etl/seed_cd.py 灌入样例）。
+
+Map Spec 相关模型（LayerSpec / MapSpec 等）单一模型源在
+backend/api/contracts/map_spec.py（架构 §9.3 前端契约），此处 re-export，
+避免持久化态与前端契约两套定义漂移。
 """
 from __future__ import annotations
 
@@ -10,8 +14,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.api.contracts.map_spec import (
+    FeedbackEvent,
+    LayerKind,
+    LayerSource,
+    LayerSpec,
+    LayerStatus,
+    MapSpec,
+    MapView,
+    PanelKind,
+    PanelSpec,
+)
+
 StepStatus = Literal["pending", "ready", "done", "stale", "failed"]
-LayerKind = Literal["points", "heatmap", "polygon", "line"]
 
 
 class StepNode(BaseModel):
@@ -24,20 +39,6 @@ class StepNode(BaseModel):
     result_ref: str | None = None
     derived_from: list[str] = Field(default_factory=list)
     error: str | None = None
-
-
-class LayerSpec(BaseModel):
-    """声明式地图图层（Map Spec 的最小单元）。
-
-    前端只渲染不计算：data_ref 指向 steps 的 result_ref，style 由后端给建议值。
-    """
-
-    id: str
-    kind: LayerKind
-    data_ref: str
-    style: dict[str, Any] = Field(default_factory=dict)
-    status: StepStatus = "ready"
-    derived_from: list[str] = Field(default_factory=list)
 
 
 class Evidence(BaseModel):
@@ -116,9 +117,8 @@ class SpatialState(BaseModel):
         self.updated_at = datetime.now()
 
 
-class MapSpec(BaseModel):
-    """前端消费的声明式地图规格（架构 §2.2 L1 Map Spec 渲染器）。"""
-
-    version: str = "1.0"
-    layers: list[LayerSpec] = Field(default_factory=list)
-    viewport: dict[str, Any] | None = None
+__all__ = [
+    "Evidence", "FeedbackEvent", "LayerKind", "LayerSource", "LayerSpec",
+    "LayerStatus", "MapSpec", "MapView", "PanelKind", "PanelSpec",
+    "SpatialState", "StepNode", "StepStatus",
+]

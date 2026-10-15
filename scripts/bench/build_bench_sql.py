@@ -6,8 +6,6 @@
 使 ANN 召回测试有意义。流式读取，避免把 130 MB 文件整体载入内存。
 """
 import os
-import re
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
@@ -29,7 +27,7 @@ def extract_query_vector(path):
     """流式扫描，取第一个维度 >= MIN_DIM 的 [ ... ] 向量字面量。"""
     buf = []
     in_vec = False
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         while True:
             chunk = fh.read(1 << 20)
             if not chunk:
@@ -56,7 +54,7 @@ def extract_query_vector(path):
 def main():
     qvec = extract_query_vector(VEC_SRC)
     for tpl, out in PAIRS:
-        with open(tpl, "r", encoding="utf-8") as fh:
+        with open(tpl, encoding="utf-8") as fh:
             content = fh.read()
         content = content.replace("{QVEC}", qvec)
         with open(out, "w", encoding="utf-8", newline="\n") as fh:
