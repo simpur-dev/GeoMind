@@ -5,6 +5,12 @@
 """
 from __future__ import annotations
 
+import os
+
+# 测试永不调真实 LLM：必须在任何 Settings 实例化前覆盖 .env 里的 provider
+# （env 变量优先级高于 .env 文件，pydantic-settings 标准行为）
+os.environ["GEOMIND_LLM_PROVIDER"] = "fake"
+
 import pytest
 
 from backend.app import build_services, build_skill_context

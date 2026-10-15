@@ -97,7 +97,14 @@ def _decide_node(state: BrainState, ctx: SkillContext) -> BrainState:
     feats = (f"候选 POI {len(cands)} 个；客流最高网格 {top['grid_id']}"
              f"（flow={top.get('flow')}，POI {top.get('poi_cnt')} 个，"
              f"评分 {top.get('avg_rating')}）")
-    text = llm.chat([LLMMessage(role="user", content=f"FEATURES: {feats}")], temperature=0.0)
+    try:
+        prompt = ("你是连锁门店选址分析师。基于以下决策特征，给出一句选址结论与理由："
+                  "直接说推荐哪个网格、为什么，不超过 80 字，不要罗列选项或反问。\n"
+                  f"FEATURES: {feats}")
+        text = llm.chat([LLMMessage(role="user", content=prompt)], temperature=0.0)
+    except Exception as exc:  # noqa: BLE001 - LLM 不可达/报错时降级为模板结论，7 步图不中断
+        text = (f"结论：基于决策特征给出可解释建议 —— {feats}。"
+                f"（真实 LLM 网关暂不可用，已降级为模板结论：{exc}）")
     decision = {"summary": text, "top_grid": top}
     emit(ctx, "decision.updated", decision)
     return {"decision": decision}
