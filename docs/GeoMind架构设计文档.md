@@ -1183,14 +1183,14 @@ GeoMind/
 ## 12. 实施路线图
 
 **阶段 0（赛题发布前 · 地基，可验收 checklist）**
-- [ ] Docker 版 SeekDB V1.4.0 实例起通（quay 镜像、127.0.0.1:2881、root 空密码），验证五模复验与 V1.3 回滚路径（§6.1）；不再导入 SRS 元数据（本机 SRS 仅 SRID 0）。
-- [ ] 能力实测清单（已据实测报告部分完成）：SPATIAL INDEX 与 cosine HNSW 建索引、三模混合查询 EXPLAIN 见 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`（§6.6）；大数据量索引命中待补测。
+- [x] Docker 版 SeekDB V1.4.0 实例起通（quay 镜像、127.0.0.1:2881），五模复验通过、V1.3 回滚路径保留（§6.1）—— **2026-10-15 完成**，见《SeekDB环境实测报告.md》。
+- [x] 能力实测清单：SPATIAL INDEX（V1.4 实测不参与查询计划，两绕行方案已量化）、cosine HNSW、三模/四模混合 EXPLAIN 见 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`（§6.6）；10 万级压测完成 —— 见《压测报告-10万级.md》。
 - [x] 按 6.3 建好全部 DDL（去 SRID、含 ngram 全文索引），灌入一个城市样例 POI/网格数据 —— **2026-10-15 已完成**：`backend/db/migrations/001_init_schema.sql` 实跑通过（6 表 7 索引 0 错误），`backend/etl/seed_cd.py` 灌入成都主城 2 万 POI（含 2 万 × VECTOR(1024)）+ 800 铺位 + 2000 网格 ×2 时段 + 60 知识切片 + 1 条 Spatial State；四模混合检索最小闭环已点亮，见《开发进度.md》验收锚点 #8。
 - [x] 落地 Skill 基类 + Registry + MCP Server（Streamable HTTP）骨架，`tools/list` 可见 —— **2026-10-15 已完成**：`backend/skills/`（base 按 §5.2 原样实现、registry 递归 discover + 幂等）、5 个原子 Skill + 1 个场景 Skill（site_selection）；`backend/mcp_server/server.py` 已起 Streamable HTTP，`tools/list` 返回 6 个工具且每个含 inputSchema。42 个 pytest + ruff + mypy 全绿。
 - [x] 落地 Spatial State 模型 + LangGraph 7 步骨架（checkpointer + interrupt）—— **2026-10-15 已完成**：`backend/state/`（Pydantic v2 模型 + 依赖图局部重算 + OB 持久化）、`backend/brain/graph.py`（7 节点固定图，intent 节点低置信度 `interrupt()` 追问，恢复后跑通）；checkpointer 为进程内共享 `MemorySaver`（langgraph 1.x 要求）。
-- [ ] 落地 Map Spec 渲染器（前端高德 JS+Loca）。
-- [ ] 前端地基（可摘除壳，第 9 章）：三栏单页工作台骨架；Map Spec 渲染器先实现 poi 与 heatmap 两种 kind；接入 SSE（token/tool/layer.update）；打通一条"对话→Map Spec→地图渲染"的 hello-world；框选/点选经 feedback 回传一条。**具体业务页面等任务书发布后再补。**
-- [ ] **打通"多模混合检索"最小闭环**（第 3.2 节时序），作为验收锚点。
+- [x] 落地 Map Spec 渲染器（前端高德 JS + 无 key 降级画布双档）—— **2026-10-15 完成**：`web/src/layers/`（kind 注册表 + 增量 diff + MapAdapter 两档实现），浏览器实测通过。
+- [x] 前端地基（可摘除壳，第 9 章）：三栏单页工作台（Vue3+Vite+TS+Pinia）；poi/heatmap 两种 kind 渲染器；SSE 真事件流（12 事件 + Last-Event-ID 续传）；hello-world 与框选/点选 feedback 回传全部浏览器实测 —— **2026-10-15 完成**。**具体业务页面等任务书发布后再补。**
+- [x] **打通"多模混合检索"最小闭环**（第 3.2 节时序），作为验收锚点 —— **2026-10-15 完成**：一条 SQL 四模 24.9 ms，EXPLAIN 证据见《压测报告-10万级.md》。
 
 **阶段 1（任务书发布后 · 适配）**：按任务书参数化场景 Skill、补赛题指定数据、对齐官方评分口径；若赛题版本停在 4.3.3，切换距离算法为 l2/inner_product。
 
