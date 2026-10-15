@@ -21,17 +21,17 @@
 
 ## 当前状态
 
-阶段 0 共 8 项验收：**4 项完成 · 4 项未开始**，最终验收锚点「多模混合检索最小闭环」**已点亮**——一条 SQL 完成 全文 + 向量 + 空间 + 标量，生产库实测 24.9 ms。
+阶段 0 共 8 项验收：**6 项完成 · 2 项未开始**（剩余为 Map Spec 渲染器与前端地基）。最终验收锚点「多模混合检索最小闭环」**已点亮**——一条 SQL 完成 全文 + 向量 + 空间 + 标量，生产库实测 24.9 ms。
 
 | # | 验收项 | 状态 |
 |---|---|---|
 | 1 | Docker 版 SeekDB V1.4.0 + 五模复验 + V1.3 回滚路径 | ✅ 完成 |
 | 2 | 能力实测（SPATIAL INDEX / cosine HNSW / 三模 EXPLAIN）+ 10 万级压测 | ✅ 完成 |
 | 3 | 落地生产 DDL + 灌入城市样例数据 | ✅ 完成（`geomind` 库 6 表 + 2 万 POI） |
-| 4 | Skill 基类 + Registry + MCP Server 骨架 | ❌ 未开始 |
-| 5 | Spatial State + LangGraph 7 步骨架 | ❌ 未开始 |
-| 6 | Map Spec 渲染器 | ❌ 未开始 |
-| 7 | 前端三栏工作台 + SSE | ❌ 未开始 |
+| 4 | Skill 基类 + Registry + MCP Server 骨架 | ✅ 完成（6 工具，tools/list 可见） |
+| 5 | Spatial State + LangGraph 7 步骨架 | ✅ 完成（含 interrupt 追问与恢复） |
+| 6 | Map Spec 渲染器 | ❌ 未开始（模型与产出已就绪，缺渲染器本体） |
+| 7 | 前端三栏工作台 + SSE | ❌ 未开始（REST/SSE 契约已实现） |
 | 8 | **多模混合检索最小闭环（验收锚点）** | ✅ 完成（四模 24.9 ms，含可证伪对照） |
 
 完整清单、风险账与优先级见 [`docs/开发进度.md`](docs/开发进度.md)。
@@ -43,6 +43,8 @@
 | [`docs/GeoMind架构设计文档.md`](docs/GeoMind架构设计文档.md) | **权威基线 v1.4**：六层架构、四条铁律、Spatial State Schema、Skill/MCP 插件机制、存储设计、前后端契约、路线图 |
 | [`docs/SeekDB环境实测报告.md`](docs/SeekDB环境实测报告.md) | 实跑结论（**与架构文档冲突时以本报告为准**）：能力矩阵、算子白名单、EXPLAIN 证据、V1.4 迁移记录 |
 | [`docs/开发进度.md`](docs/开发进度.md) | 阶段 0 checklist、环境坐标速查、时间线、风险表、下一步优先级 |
+| [`docs/设计方案-技能层与状态层骨架.md`](docs/设计方案-技能层与状态层骨架.md) | 应用骨架设计（8 模块 / 不做清单 / 实施步骤 / 测试矩阵） |
+| [`backend/`](backend/) | 后端：Query Builder（三层卡点）+ 6 Skill + MCP + REST/SSE + LangGraph 7 步 + CLI。42 个 pytest + ruff + mypy 全绿 |
 | [`docs/调研报告-优秀案例.md`](docs/调研报告-优秀案例.md) | 60+ 来源汇编：学术 9 例、工业 5 例、框架选型结论 |
 | [`docs/architecture.html`](docs/architecture.html) | 六层架构可视化大图 |
 | [`docs/压测报告-10万级.md`](docs/压测报告-10万级.md) | 10 万级索引压测：空间索引不命中的坐实与两个绕行方案的量化 |
@@ -105,7 +107,11 @@ $py = "C:\Users\34928\.workbuddy\binaries\python\versions\3.13.12\python.exe"
 | 网格聚合（25 网格 × 2 万点） | `ST_Contains` **274.5 ms** | `grid_id` 冗余列 JOIN：**2.2 ms** | **127×**（10 万级 278×） |
 | 向量 ANN（10 万 × 1024 维） | 精确 123 ms | HNSW 近似 **61 ms**，召回 10/10 | 2× |
 
-**四模混合（生产库 2 万 POI）**：全文(ngram AND) + 向量(cosine ANN) + 空间(MBR + ST) + 标量 → **24.9 ms**，EXPLAIN = `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`，驱动索引自动选 `idx_poi_bbox`，全文谓词亦进入预过滤（`pushdown_match_filter`）。对照组（纯向量无过滤）TOP10 仅 1 条落在圈内，证明多模过滤在索引扫描阶段生效。
+**四模混合（生产库 2 万 POI）**：全文(ngram AND) + 向量(cosine ANN) + 空间(MBR + ST) + 标量 → **24.9 ms**，EXPLAIN = `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`，全文谓词亦进入预过滤（`pushdown_match_filter`）。对照组（纯向量无过滤）TOP10 仅 1 条落在圈内，证明多模过滤在索引扫描阶段生效。
+
+**三通道平权**（架构 §9.1）：CLI（`python -m backend.demo "查询"`）、REST/SSE（`python -m backend.main`，127.0.0.1:8000）、MCP（`python -m backend.mcp_server.server`，127.0.0.1:8765/mcp）挂在同一套内核契约上，前端可整体摘除。
+
+**质量门**：`pytest` 42 个用例（QueryBuilder 卡点 / Skill 对拍 / 状态局部重算 / 7 步图 / MCP tools/list）+ `ruff check` + `mypy` 全绿。Python 3.11 隔离 venv：`D:\python_env\geomind`。
 
 ## 路线图
 

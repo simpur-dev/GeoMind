@@ -381,8 +381,8 @@ class SkillContext(BaseModel):
     db: Any = None                  # 延迟注入的 OB 连接/会话
     amap: Any = None
 
-I = TypeVar("I", bound=BaseModel)
-O = TypeVar("O", bound=BaseModel)
+I = TypeVar("InT", bound=BaseModel)
+O = TypeVar("OutT", bound=BaseModel)
 
 class SkillMetadata(BaseModel):
     name: str
@@ -391,7 +391,7 @@ class SkillMetadata(BaseModel):
     description: str
     intent_examples: list[str] = Field(default_factory=list)  # 用于场景路由
 
-class SpatialSkill(ABC, Generic[I, O]):
+class SpatialSkill(ABC, Generic[InT, OutT]):
     """所有 Skill 的统一基类。场景 Skill 与原子 Skill 共用。"""
 
     metadata: SkillMetadata
@@ -405,7 +405,7 @@ class SpatialSkill(ABC, Generic[I, O]):
         原子 Skill 可返回 [{"id": self.metadata.name, "skill": self.metadata.name}]。"""
 
     @abstractmethod
-    def run(self, inputs: I, ctx: SkillContext) -> O:
+    def run(self, inputs: InT, ctx: SkillContext) -> OutT:
         """执行：原子 Skill 在此下推 SQL / 调高德；场景 Skill 在此编排。
         禁止在此做坐标几何计算。"""
 
@@ -1111,41 +1111,52 @@ GeoMind/
 ├── backend/
 │   ├── main.py                  # FastAPI 入口
 │   ├── brain/                   # L2 空间大脑：LangGraph StateGraph 节点
-│   │   ├── graph.py             #   7 步状态图与条件边
-│   │   ├── intent.py           #   意图理解器（局部 ReAct）
+│   │   ├── graph.py             #   ★7 步状态图与条件边（checkpointer + interrupt 消歧）
+│   │   ├── intent.py            #   ★规则意图器（词表 + 正则，可解释可测试；LLM 版可无缝替换）
 │   │   ├── constraints.py      #   约束建模器
 │   │   ├── state_manager.py    #   依赖图/stale 标记/局部重算调度
 │   │   └── synthesize.py       #   决策综合器
 │   ├── state/                   # L5 Spatial State Pydantic 模型与 JSON 示例
+│   │   ├── models.py            #   ★SpatialState / StepNode / LayerSpec / MapSpec（架构 §4.1）
+│   │   └── repository.py        #   ★scene_solution 表读写 + version 自增 + 依赖图重算标记
 │   ├── skills/
 │   │   ├── base.py              #   SpatialSkill ABC / SkillContext / ToolContext
 │   │   ├── registry.py          #   @register_skill + discover
-│   │   ├── atomic/             #   原子 Skill：geocode/search/path/isochrone/agg
-│   │   └── scenes/             #   场景 Skill：site_selection/footfall/...
+│   │   ├── atomic/             #   ★原子 Skill：multi_modal_search / spatial_join_agg / traffic_grid_agg / knowledge_search / poi_detail
+│   │   └── scenes/             #   ★场景 Skill：site_selection（编排 + 打分 + render_spec）
 │   ├── services/                # L4 数据与计算服务
-│   ├── query_builder.py     #   空间/标量/向量/全文→一条 SQL + 静态校验/dry-run
+│   │   ├── __init__.py          #   ★ServiceBundle（ob / query_builder / embedding / state_repo / amap）
 │   │   ├── spatial_router.py    #   下推 OB vs 高德路由
-│   │   └── amap_gateway.py     #   高德 key/限流/缓存/字段归一
-│   ├── mcp_server/server.py     # MCP Streamable HTTP 入口
+│   │   └── amap_gateway.py      #   高德 key/限流/缓存/字段归一
+│   ├── query_builder.py         #   ★L4 唯一 SQL 出口：四类约束→一条 SQL + 静态校验/dry-run/EXPLAIN 断言
+│   ├── mcp_server/server.py     # MCP Streamable HTTP 入口（动态注册 Skill 为 tools）
 │   ├── api/                     # FastAPI 对外契约（详见第 9 章）
 │   │   ├── sessions.py          #   sessions/chat/feedback/layers/report/skills 路由
 │   │   ├── sse.py              #   SSE 事件总线
 │   │   └── contracts/          #   MapSpec/Event/Feedback 的 Pydantic 模型
+│   ├── app.py                   # ★ServiceBundle 单一构造点（ob / query_builder / embedding / state_repo）
+│   ├── config.py                # ★pydantic-settings，默认值对齐本机实测口径
+│   ├── main.py                  # ★FastAPI 入口（REST + SSE）
+│   ├── demo.py                  # ★CLI 演示入口：python -m backend.demo "查询"
 │   ├── db/
-│   │   ├── connection.py
+│   │   ├── connection.py        #   ★pymysql 连接池 + 服务端 SYSDATE(6) 计时 + EXPLAIN
 │   │   └── migrations/
 │   │       └── 001_init_schema.sql   # ★生产 DDL 权威源（6 表，含 lon/lat/grid_id 冗余列与三类索引）
 │   ├── etl/                     # 数据管线：POI/客流/轨迹导入与 embedding
 │   │   ├── seed_cd.py           #   ★样例数据生成器（成都主城，合成向量可替换真模型）
 │   │   ├── gen_verify.py        #   ★生成 verify_prod.sql（四模闭环 + 空间连接 + 状态读写）
 │   │   └── data/                #   生成物（*.sql / qvec_*.txt），已 gitignore
-│   └── llm/                     # LLM 网关抽象（豆包/DeepSeek）
+│   ├── llm/                     # LLM 网关抽象（豆包/DeepSeek）
+│   │   └── gateway.py           #   ★LLMGateway ABC + FakeLLMGateway（阶段 0 不接真实模型）
+│   ├── embeddings/              # ★Embedding Provider 抽象（synthetic 与 ETL 同源 / bge 占位）
 ├── web/                         # 正式版单页工作台（可摘除，详见第 9 章）
 │   ├── src/{views,components,layers,api,stores}
 │   ├── package.json / vite.config.ts / .env.example
 ├── web-lite/                    # 极速版 Streamlit/Gradio 演示壳
 ├── docker-compose.yml           # profiles 控制 web 可选启用；SeekDB 主用 Docker V1.4.0 镜像
 ├── docs/sql/                     # 复验脚本：verify_v140.sql（五模 + 三模混合 7 项，可直接重跑；原 backup/ 迁移期产物已清理）
+├── tests/                        # ★pytest：test_query_builder / test_skills / test_state / test_graph / test_mcp（42 个用例）
+├── pyproject.toml                # ★依赖 + ruff/mypy/pytest 配置（Python 3.11+）
 ├── pyproject.toml
 └── tests/                       # pytest：SQL dry-run / Skill 编排 / 状态局部重算
 ```
@@ -1175,8 +1186,8 @@ GeoMind/
 - [ ] Docker 版 SeekDB V1.4.0 实例起通（quay 镜像、127.0.0.1:2881、root 空密码），验证五模复验与 V1.3 回滚路径（§6.1）；不再导入 SRS 元数据（本机 SRS 仅 SRID 0）。
 - [ ] 能力实测清单（已据实测报告部分完成）：SPATIAL INDEX 与 cosine HNSW 建索引、三模混合查询 EXPLAIN 见 `VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER)`（§6.6）；大数据量索引命中待补测。
 - [x] 按 6.3 建好全部 DDL（去 SRID、含 ngram 全文索引），灌入一个城市样例 POI/网格数据 —— **2026-10-15 已完成**：`backend/db/migrations/001_init_schema.sql` 实跑通过（6 表 7 索引 0 错误），`backend/etl/seed_cd.py` 灌入成都主城 2 万 POI（含 2 万 × VECTOR(1024)）+ 800 铺位 + 2000 网格 ×2 时段 + 60 知识切片 + 1 条 Spatial State；四模混合检索最小闭环已点亮，见《开发进度.md》验收锚点 #8。
-- [ ] 落地 Skill 基类 + Registry + MCP Server（Streamable HTTP）骨架，`tools/list` 可见。
-- [ ] 落地 Spatial State 模型 + LangGraph 7 步骨架（checkpointer + interrupt）。
+- [x] 落地 Skill 基类 + Registry + MCP Server（Streamable HTTP）骨架，`tools/list` 可见 —— **2026-10-15 已完成**：`backend/skills/`（base 按 §5.2 原样实现、registry 递归 discover + 幂等）、5 个原子 Skill + 1 个场景 Skill（site_selection）；`backend/mcp_server/server.py` 已起 Streamable HTTP，`tools/list` 返回 6 个工具且每个含 inputSchema。42 个 pytest + ruff + mypy 全绿。
+- [x] 落地 Spatial State 模型 + LangGraph 7 步骨架（checkpointer + interrupt）—— **2026-10-15 已完成**：`backend/state/`（Pydantic v2 模型 + 依赖图局部重算 + OB 持久化）、`backend/brain/graph.py`（7 节点固定图，intent 节点低置信度 `interrupt()` 追问，恢复后跑通）；checkpointer 为进程内共享 `MemorySaver`（langgraph 1.x 要求）。
 - [ ] 落地 Map Spec 渲染器（前端高德 JS+Loca）。
 - [ ] 前端地基（可摘除壳，第 9 章）：三栏单页工作台骨架；Map Spec 渲染器先实现 poi 与 heatmap 两种 kind；接入 SSE（token/tool/layer.update）；打通一条"对话→Map Spec→地图渲染"的 hello-world；框选/点选经 feedback 回传一条。**具体业务页面等任务书发布后再补。**
 - [ ] **打通"多模混合检索"最小闭环**（第 3.2 节时序），作为验收锚点。

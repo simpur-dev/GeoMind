@@ -1,0 +1,57 @@
+[project]
+name = "geomind"
+version = "0.1.0"
+description = "GeoMind 空间智能体：同库五模，一条 SQL（2026 OceanBase 数据库大赛 · 高德赛道）"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pydantic-settings",
+    "pymysql",
+    "langgraph",
+    "mcp>=1,<2",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "ruff",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# ETL 脚本（seed_cd.py / gen_verify.py）与 scripts/bench 保持同一套 % 格式化风格：
+# 它们是数据生成器，改动格式化方式有数据一致性风险，且非应用代码路径。
+"backend/etl/*" = ["UP031", "UP009", "B007", "E501"]
+"scripts/*" = ["UP031", "UP009", "B007", "E501"]
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["backend/etl/", "scripts/"]
+
+# ETL / 压测脚本是数据生成工具（非应用代码路径），放宽类型注解要求；
+# 应用代码（backend 除 etl 外）仍严格执行 disallow_untyped_defs。
+[[tool.mypy.overrides]]
+module = ["backend.etl.*", "scripts.bench.*"]
+disallow_untyped_defs = false
