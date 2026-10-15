@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GeoMind 总体架构图 · 面向空间智能的多模 Agent 架构</title>
+<style>
+  /* ============ 基础 ============ */
+  :root{
+    --navy:#0B2A4A;
+    --navy-2:#12395f;
+    --teal:#0EA5A4;
+    --teal-soft:#d6f1f0;
+    --orange:#F59E0B;
+    --orange-soft:#fdeccd;
+    --bg:#f4f7fa;
+    --card:#ffffff;
+    --ink:#1c2b3a;
+    --ink-2:#4a5d72;
+    --line:#d9e2ec;
+    --l1:#0ea5a4;
+    --l2:#1d4e89;
+    --l3:#f59e0b;
+    --l4:#0e7c86;
+    --l5:#33567a;
+    --l6:#0b2a4a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family: system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    line-height:1.55;
+    font-size:14px;
+  }
+  .wrap{max-width:1280px;margin:0 auto;padding:24px 28px 48px;}
+  code,.mono{font-family: ui-monospace, "JetBrains Mono", Consolas, "Courier New", monospace; font-size:12.5px;}
+  h1,h2,h3,h4{margin:0;}
+  section{margin-top:28px;}
+  .sec-title{
+    display:flex;align-items:center;gap:10px;
+    font-size:18px;font-weight:700;color:var(--navy);
+    border-left:4px solid var(--teal);padding-left:10px;margin-bottom:14px;
+  }
+  .sec-title .en{font-size:12px;color:var(--ink-2);font-weight:500;letter-spacing:.5px;}
+
+  /* ============ 顶部标题区 ============ */
+  header.hero{
+    background:linear-gradient(135deg,#0B2A4A 0%, #12395f 55%, #0e7c86 100%);
+    color:#fff;border-radius:14px;padding:26px 30px;
+    box-shadow:0 6px 20px rgba(11,42,74,.18);
+    position:relative;overflow:hidden;
+  }
+  header.hero::after{
+    content:"";position:absolute;right:-60px;top:-60px;width:260px;height:260px;
+    background:radial-gradient(circle, rgba(245,158,11,.25), transparent 70%);
+  }
+  .hero .kicker{font-size:12.5px;letter-spacing:2px;color:#9fd8d6;text-transform:uppercase;}
+  .hero h1{font-size:30px;margin:6px 0 4px;letter-spacing:.5px;}
+  .hero .sub{font-size:14.5px;color:#cfe3ef;}
+  .badges{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;}
+  .badge{
+    background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+    padding:5px 12px;border-radius:999px;font-size:12.5px;backdrop-filter:blur(4px);
+  }
+  .badge.orange{background:rgba(245,158,11,.22);border-color:rgba(245,158,11,.55);}
+
+  /* ============ 六层主图 ============ */
+  .arch{
+    display:grid;
+    grid-template-columns: 1fr 150px;
+    gap:14px;
+  }
+  .layers{display:flex;flex-direction:column;gap:10px;}
+  .layer{
+    background:var(--card);border-radius:12px;padding:12px 14px;
+    border:1px solid var(--line);border-left:6px solid var(--lc,#ccc);
+    box-shadow:0 2px 6px rgba(11,42,74,.06);
+    position:relative;
+  }
+  .layer .lhead{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;}
+  .layer .ltag{
+    font-size:11px;font-weight:700;color:#fff;background:var(--lc,#888);
+    padding:2px 8px;border-radius:6px;letter-spacing:.5px;
+  }
+  .layer .lname{font-size:15px;font-weight:700;color:var(--navy);}
+  .layer .ltech{font-size:11.5px;color:var(--ink-2);margin-left:auto;}
+  .mods{display:flex;flex-wrap:wrap;gap:6px;}
+  .mod{
+    background:#f1f6fa;border:1px solid #dde7ef;border-radius:7px;
+    padding:4px 9px;font-size:12px;color:var(--ink);
+  }
+  .mod.teal{background:var(--teal-soft);border-color:#bfe4e2;}
+  .mod.orange{background:var(--orange-soft);border-color:#f5d99a;}
+  .mod.navy{background:#e3ecf5;border-color:#c5d6e8;}
+  .mod .fn{color:#0b5e66;}
+
+  /* 层间箭头 */
+  .arrow-down{
+    text-align:center;color:var(--teal);font-size:14px;line-height:1;
+    margin:-6px 0 -6px 0;height:14px;
+  }
+
+  /* 右侧 7 步闭环色带 */
+  .loop{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:12px 10px;display:flex;flex-direction:column;gap:8px;
+    box-shadow:0 2px 6px rgba(11,42,74,.06);
+  }
+  .loop .ltitle{
+    font-size:12.5px;font-weight:700;color:var(--navy);text-align:center;
+    padding-bottom:6px;border-bottom:1px dashed var(--line);
+  }
+  .step{
+    border-radius:8px;padding:7px 8px;font-size:11.5px;color:#fff;
+    display:flex;flex-direction:column;gap:2px;
+  }
+  .step .n{font-weight:700;font-size:12px;}
+  .step .where{font-size:10.5px;opacity:.92;}
+  .s1{background:#1d4e89;}
+  .s2{background:#1d4e89;}
+  .s3{background:#0e7c86;}
+  .s4{background:#0e7c86;}
+  .s5{background:#f59e0b;color:#3a2a05;}
+  .s6{background:#0ea5a4;}
+  .s7{background:#33567a;}
+
+  /* 关系图例 */
+  .legend{
+    margin-top:12px;background:var(--card);border:1px dashed var(--line);
+    border-radius:10px;padding:10px 14px;font-size:12px;color:var(--ink-2);
+    display:flex;flex-wrap:wrap;gap:18px;align-items:center;
+  }
+  .legend .item{display:flex;align-items:center;gap:6px;}
+  .swatch{width:14px;height:14px;border-radius:3px;display:inline-block;}
+
+  /* ============ 三条主线 ============ */
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .pillar{
+    background:var(--card);border-radius:12px;padding:16px;
+    border-top:4px solid var(--teal);box-shadow:0 2px 8px rgba(11,42,74,.07);
+  }
+  .pillar.p2{border-top-color:var(--navy);}
+  .pillar.p3{border-top-color:var(--orange);}
+  .pillar h3{font-size:15px;color:var(--navy);margin-bottom:6px;}
+  .pillar .tag{
+    display:inline-block;font-size:11px;color:#fff;background:var(--teal);
+    padding:1px 8px;border-radius:5px;margin-bottom:8px;
+  }
+  .pillar.p2 .tag{background:var(--navy);}
+  .pillar.p3 .tag{background:var(--orange);}
+  .pillar p{margin:6px 0;font-size:12.8px;color:var(--ink-2);}
+  .pillar .codebox{
+    background:#0b2a4a;color:#cfe9e7;border-radius:8px;padding:8px 10px;
+    font-family:ui-monospace,Consolas,monospace;font-size:11.5px;
+    margin-top:8px;line-height:1.5;overflow-x:auto;white-space:pre;
+  }
+
+  /* ============ 数据流步骤条 ============ */
+  .flows{display:grid;grid-template-columns:1fr;gap:14px;}
+  .flow{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;box-shadow:0 2px 6px rgba(11,42,74,.06);
+  }
+  .flow h3{font-size:14.5px;color:var(--navy);margin-bottom:10px;}
+  .flow h3 .who{font-size:11.5px;color:var(--ink-2);font-weight:500;margin-left:8px;}
+  .steps{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;}
+  .stp{
+    flex:1 1 0;min-width:120px;position:relative;
+    background:#f1f6fa;border:1px solid #dde7ef;border-radius:8px;
+    padding:8px 10px;font-size:11.8px;color:var(--ink);
+    margin-right:18px;
+  }
+  .stp::after{
+    content:"▶";position:absolute;right:-14px;top:50%;transform:translateY(-50%);
+    color:var(--teal);font-size:11px;
+  }
+  .stp:last-child{margin-right:0;}
+  .stp:last-child::after{display:none;}
+  .stp .sn{
+    display:inline-block;background:var(--navy);color:#fff;border-radius:50%;
+    width:18px;height:18px;line-height:18px;text-align:center;
+    font-size:10.5px;margin-right:5px;font-weight:700;
+  }
+  .stp.ob{background:#e3ecf5;border-color:#c5d6e8;}
+  .stp.amap{background:var(--orange-soft);border-color:#f5d99a;}
+  .stp.llm{background:var(--teal-soft);border-color:#bfe4e2;}
+  .stp .who2{display:block;font-size:10.5px;color:var(--ink-2);margin-top:3px;}
+
+  /* ============ OB 能力徽章 ============ */
+  .ob-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .ob-card{
+    background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;box-shadow:0 1px 4px rgba(11,42,74,.05);
+  }
+  .ob-card .t{font-size:12px;font-weight:700;color:var(--navy);}
+  .ob-card .d{font-size:11.8px;color:var(--ink-2);margin-top:3px;}
+  .ob-card .mono{color:#0b5e66;}
+  .ob-card.warn{border-left:4px solid var(--orange);}
+
+  /* ============ 场景矩阵 ============ */
+  .scenes{display:flex;flex-wrap:wrap;gap:10px;}
+  .scene{
+    position:relative;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:9px 14px;font-size:13px;font-weight:600;
+    color:var(--navy);cursor:default;transition:all .15s;
+    box-shadow:0 1px 3px rgba(11,42,74,.05);
+  }
+  .scene:hover{border-color:var(--teal);background:var(--teal-soft);transform:translateY(-1px);}
+  .scene .tip{
+    visibility:hidden;opacity:0;position:absolute;bottom:calc(100% + 8px);left:50%;
+    transform:translateX(-50%);background:var(--navy);color:#fff;
+    padding:9px 12px;border-radius:8px;font-size:11.5px;font-weight:400;
+    width:260px;line-height:1.5;z-index:20;box-shadow:0 6px 18px rgba(0,0,0,.25);
+    transition:opacity .15s;
+  }
+  .scene:hover .tip{visibility:visible;opacity:1;}
+  .tip b{color:#ffd27a;}
+  .tip .row{margin-top:3px;}
+
+  /* ============ 页脚 ============ */
+  footer{
+    margin-top:32px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:11.8px;color:var(--ink-2);display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;
+  }
+
+  /* ============ L1 通道条 / 契约网关 ============ */
+  .channels{
+    border:1.5px dashed var(--l1);border-radius:10px;
+    padding:8px 12px;background:#f2faf9;margin-bottom:8px;position:relative;
+  }
+  .channels .ch-title{
+    font-size:11.8px;font-weight:700;color:var(--l1);
+    display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  }
+  .channels .ch-note{font-size:10.8px;color:var(--ink-2);margin-left:auto;font-weight:400;}
+  .ch-badges{display:flex;flex-wrap:wrap;gap:6px;}
+  .ch-badge{
+    background:#fff;border:1px solid #bfe4e2;border-radius:6px;
+    padding:3px 9px;font-size:11.5px;color:var(--ink);
+  }
+  .ch-badge b{color:var(--l1);}
+  .gateway{
+    background:linear-gradient(90deg,#fff6df,#fff);
+    border:1.5px dashed var(--orange);border-radius:10px;
+    padding:7px 12px;text-align:center;margin:3px 0;
+  }
+  .gateway .g-title{font-size:12.8px;font-weight:700;color:#9a6a00;}
+  .gateway .g-tech{font-size:11px;color:var(--ink-2);}
+
+  /* ============ 轻量 Web 演示层 ============ */
+  .wireframe{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:12px;box-shadow:0 2px 6px rgba(11,42,74,.06);
+  }
+  .wf-topbar{
+    background:#e3ecf5;border-radius:8px;padding:6px 12px;font-size:11.5px;
+    color:var(--navy);display:flex;justify-content:space-between;margin-bottom:8px;font-weight:600;
+  }
+  .wf-body{display:grid;grid-template-columns:22% 1fr 24%;gap:8px;}
+  .wf-col{
+    border:1.5px dashed #b9cbdc;border-radius:8px;padding:8px;
+    background:#fafcfe;font-size:11px;color:var(--ink-2);min-height:240px;
+  }
+  .wf-col h4{font-size:12px;color:var(--navy);margin-bottom:6px;}
+  .wf-col .msg{
+    background:#fff;border:1px solid #dde7ef;border-radius:6px;
+    padding:4px 7px;margin-bottom:5px;font-size:10.8px;color:var(--ink);
+  }
+  .wf-col .msg.user{background:var(--teal-soft);border-color:#bfe4e2;}
+  .wf-chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0;}
+  .wf-chip{
+    background:var(--orange-soft);border:1px solid #f5d99a;border-radius:999px;
+    padding:1px 7px;font-size:10.5px;color:#7a5200;
+  }
+  .wf-tool{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;color:#0b5e66;margin-top:4px;}
+  .wf-map{
+    background:linear-gradient(135deg,#e8f4f3,#dfeaf5);
+    border:1.5px dashed var(--l1);border-radius:8px;padding:10px;
+    position:relative;min-height:240px;overflow:hidden;
+  }
+  .wf-marker{
+    position:absolute;width:10px;height:10px;border-radius:50%;
+    background:var(--orange);box-shadow:0 0 0 3px rgba(245,158,11,.25);
+  }
+  .wf-marker .lbl{
+    position:absolute;left:14px;top:-4px;font-size:10px;font-weight:700;
+    color:#9a4a00;background:#fff;padding:0 4px;border-radius:4px;white-space:nowrap;
+  }
+  .wf-iso{
+    position:absolute;border:1.5px solid var(--teal);border-radius:50%;
+    background:rgba(14,165,164,.12);
+  }
+  .wf-heat{
+    position:absolute;background:radial-gradient(circle,rgba(245,158,11,.45),transparent 70%);
+    border-radius:50%;
+  }
+  .wf-route{
+    position:absolute;height:0;border-top:2.5px dashed var(--l2);transform-origin:left center;
+  }
+  .wf-layerbar{
+    position:absolute;bottom:8px;left:8px;right:8px;
+    background:rgba(255,255,255,.9);border-radius:6px;padding:4px 8px;
+    font-size:10.5px;color:var(--ink);display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  }
+  .wf-tools{
+    position:absolute;top:8px;left:8px;background:rgba(255,255,255,.9);
+    border-radius:6px;padding:3px 8px;font-size:10.5px;color:var(--navy);
+  }
+  .wf-rank{
+    display:flex;justify-content:space-between;font-size:10.8px;
+    padding:3px 6px;background:#fff;border:1px solid #e3ecf5;border-radius:5px;margin-bottom:4px;
+  }
+  .wf-rank .score{color:var(--orange);font-weight:700;}
+  .wf-progress{
+    margin-top:8px;background:#e3ecf5;border-radius:8px;padding:7px 12px;
+    font-size:11.5px;color:var(--navy);display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+  }
+  .wf-progress .step-done{color:var(--teal);font-weight:700;}
+  .wf-progress .step-run{color:var(--orange);font-weight:700;}
+  .wf-progress .recompute{margin-left:auto;font-size:10.8px;color:var(--ink-2);}
+
+  .three-no{
+    margin-top:12px;background:var(--orange-soft);border:1px solid #f5d99a;
+    border-left:4px solid var(--orange);border-radius:8px;padding:10px 14px;
+    font-size:12.5px;color:#7a5200;
+  }
+  .three-no b{color:#9a4a00;}
+
+  .contract{display:grid;grid-template-columns:1.25fr 1fr;gap:12px;margin-top:12px;}
+  .contract .box{
+    background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  }
+  .contract .box h4{font-size:12.5px;color:var(--navy);margin-bottom:8px;}
+  .rest-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  .rest-table th,.rest-table td{
+    border:1px solid var(--line);padding:4px 7px;text-align:left;vertical-align:top;
+  }
+  .rest-table th{background:#e3ecf5;color:var(--navy);font-weight:600;}
+  .rest-table td.m{font-weight:700;color:var(--teal);width:52px;}
+  .rest-table td.path{font-family:ui-monospace,Consolas,monospace;font-size:10.8px;color:#0b5e66;}
+  .sse-chips{display:flex;flex-wrap:wrap;gap:5px;}
+  .sse-chip{
+    background:#e3ecf5;border:1px solid #c5d6e8;border-radius:6px;
+    padding:3px 8px;font-family:ui-monospace,Consolas,monospace;
+    font-size:10.8px;color:var(--navy);
+  }
+  .mapspec-note{
+    margin-top:10px;background:#0b2a4a;color:#cfe9e7;border-radius:8px;
+    padding:10px 14px;font-size:12px;line-height:1.6;
+  }
+
+  .three-tier{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;}
+  .tier{
+    background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;border-top:3px solid var(--tc,#ccc);
+  }
+  .tier h4{font-size:13px;color:var(--navy);margin-bottom:6px;}
+  .tier ul{margin:0;padding-left:16px;font-size:11.8px;color:var(--ink-2);line-height:1.75;}
+
+  .dual-track{
+    display:grid;grid-template-columns:1fr 70px 1fr;gap:10px;align-items:stretch;margin-top:12px;
+  }
+  .track{
+    background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;
+  }
+  .track.lite{border-left:4px solid var(--ink-2);}
+  .track.pro{border-left:4px solid var(--teal);}
+  .track h4{font-size:13px;margin-bottom:4px;color:var(--navy);}
+  .track .tag{font-size:10.8px;color:var(--ink-2);}
+  .track p{font-size:11.8px;color:var(--ink-2);margin:5px 0;}
+  .track-mid{
+    display:flex;align-items:center;justify-content:center;text-align:center;
+    font-size:11px;color:var(--navy);background:#f1f6fa;border-radius:10px;
+    padding:8px;border:1px dashed var(--teal);line-height:1.5;
+  }
+  .secret-note{
+    margin-top:10px;font-size:11.5px;color:var(--ink-2);
+    background:#f1f6fa;border-radius:8px;padding:8px 12px;border-left:3px solid var(--teal);
+  }
+
+  /* ============ SeekDB 环境信息条（只读事实） ============ */
+  .env-strip{
+    margin-top:8px;background:#0b2a4a;color:#cfe9e7;border-radius:10px;
+    padding:8px 12px;font-size:11px;line-height:1.6;
+    display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;
+  }
+  .env-strip .env-title{font-weight:700;color:#ffd27a;margin-right:4px;}
+  .env-strip .env-item{font-family:ui-monospace,Consolas,monospace;font-size:10.8px;}
+  .env-strip .env-item b{color:#fff;font-weight:600;}
+
+  /* ============ 打印 ============ */
+  @media print{
+    body{background:#fff;font-size:11.5px;}
+    .wrap{max-width:100%;padding:0;}
+    header.hero{box-shadow:none;}
+    .layer,.pillar,.flow,.ob-card,.scene{box-shadow:none;break-inside:avoid;}
+    .scene .tip{display:none;}
+    section{margin-top:16px;}
+  }
+  @media (max-width:1100px){
+    .arch{grid-template-columns:1fr;}
+    .loop{flex-direction:row;flex-wrap:wrap;}
+    .loop .ltitle{width:100%;}
+    .step{flex:1 1 30%;}
+    .pillars{grid-template-columns:1fr;}
+    .ob-grid{grid-template-columns:1fr 1fr;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ 1. 顶部标题区 ============ -->
+  <header class="hero">
+    <div class="kicker">GEOMIND · SYSTEM ARCHITECTURE</div>
+    <h1>GeoMind —— 面向空间智能的多模 Agent 架构</h1>
+    <div class="sub">2026 OceanBase 数据库大赛 · 高德赛道 ｜ AI + 数据库应用开发方向</div>
+    <div class="badges">
+      <span class="badge">空间计算下推</span>
+      <span class="badge orange">结构化空间状态 Spatial State</span>
+      <span class="badge">Skill 插件化（MCP / Streamable HTTP）</span>
+    </div>
+  </header>
+
+  <!-- ============ 2. 六层架构主图 ============ -->
+  <section>
+    <div class="sec-title">六层总体架构 <span class="en">Six-Layer Architecture · LangGraph StateGraph 驱动高德 7 步闭环</span></div>
+    <div class="arch">
+      <div class="layers">
+
+        <!-- L1 -->
+        <div class="channels">
+          <div class="ch-title">
+            ✂ 交互通道（可替换 / 可摘除，与 CLI / MCP Host 平级）
+            <span class="ch-note">删掉 web/ 目录内核零改动</span>
+          </div>
+          <div class="ch-badges">
+            <span class="ch-badge"><b>Web 单页工作台</b>　web/ · Vue3 + Vite + TS（正式版）</span>
+            <span class="ch-badge"><b>极速版</b>　web-lite/ · Streamlit / Gradio 兜底</span>
+            <span class="ch-badge"><b>CLI / MCP Host / 接口测试</b>　curl · Cursor · 评委环境</span>
+          </div>
+        </div>
+        <div class="layer" style="--lc:var(--l1)">
+          <div class="lhead">
+            <span class="ltag">L1</span>
+            <span class="lname">交互感知与空间表达层</span>
+            <span class="ltech">地图是一等输入与输出 · 前端只采集与渲染</span>
+          </div>
+          <div class="mods">
+            <span class="mod teal">高德 JS API 2.0 + Loca 渲染</span>
+            <span class="mod">手势约束翻译器（点选 / 圈选 / 拖拽 / 时间轴）</span>
+            <span class="mod">Map Spec 声明式渲染器（按 kind 注册）</span>
+            <span class="mod">多模态输入（文本 + 地图手势）</span>
+          </div>
+        </div>
+        <div class="gateway">
+          <div class="g-title">⚡ FastAPI 契约网关（REST + SSE + MCP）</div>
+          <div class="g-tech">前端唯一入口 · 不直连 OceanBase / 不持服务端 key · 摘除 Web 后内核仍完整</div>
+        </div>
+
+        <!-- L2 -->
+        <div class="layer" style="--lc:var(--l2)">
+          <div class="lhead">
+            <span class="ltag">L2</span>
+            <span class="lname">空间大脑层</span>
+            <span class="ltech">LangGraph StateGraph · Plan-Execute + 局部 ReAct</span>
+          </div>
+          <div class="mods">
+            <span class="mod navy">意图理解器（场景路由 / 槽位填充 / interrupt 消歧）</span>
+            <span class="mod navy">约束建模器（空间 / 标量 / 语义 / 时间）</span>
+            <span class="mod navy">规划器（固定状态图 + 局部 ReAct）</span>
+            <span class="mod navy">状态管理器（version / 依赖图 / 局部重算）</span>
+            <span class="mod navy">决策综合器（可解释取舍）</span>
+            <span class="mod navy">LLM 网关（豆包 / DeepSeek，OpenAI 兼容）</span>
+          </div>
+        </div>
+        <div class="arrow-down">▼ build_plan / 工具调用 ▼</div>
+
+        <!-- L3 -->
+        <div class="layer" style="--lc:var(--l3)">
+          <div class="lhead">
+            <span class="ltag">L3</span>
+            <span class="lname">空间技能层</span>
+            <span class="ltech">SpatialSkill 基类 · Registry · MCP Server</span>
+          </div>
+          <div class="mods">
+            <span class="mod orange">原子 Skill：<span class="fn mono">geocode / multi_modal_search / path_planning / isochrone / traffic_grid_agg / point_in_district</span></span>
+            <span class="mod orange">场景 Skill：智能选址 / 客流洞察 / 人群分析 / 门店运营 / 文旅行程</span>
+            <span class="mod">SkillRegistry（装饰器 + 包扫描自动发现）</span>
+            <span class="mod">MCP Server（Streamable HTTP，tools/list 动态暴露）</span>
+          </div>
+        </div>
+        <div class="arrow-down">▼ 唯一 SQL 出口 / 计算路由 ▼</div>
+
+        <!-- L4 -->
+        <div class="layer" style="--lc:var(--l4)">
+          <div class="lhead">
+            <span class="ltag">L4</span>
+            <span class="lname">空间数据与计算服务层</span>
+            <span class="ltech">下推路由 · 三层数据加工</span>
+          </div>
+          <div class="mods">
+            <span class="mod teal">多模检索服务 Query Builder（五约束 → 一条 SQL：空间圈 + 标量 + 全文关键词 + 向量语义 + JSON；静态校验 + dry-run + EXPLAIN）</span>
+            <span class="mod teal">空间计算服务（OB <span class="fn mono">ST_*</span> / 高德 API 路由）</span>
+            <span class="mod teal">特征管道：Raw Data → Spatial Object → Decision Feature（embedding）</span>
+            <span class="mod">高德适配网关（key / 限流 / 缓存 / 字段归一）</span>
+            <span class="mod">Map Spec 生成器</span>
+          </div>
+        </div>
+        <div class="arrow-down">▼ SQL / HTTP / 写回 OB ▼</div>
+
+        <!-- L5 -->
+        <div class="layer" style="--lc:var(--l5)">
+          <div class="lhead">
+            <span class="ltag">L5</span>
+            <span class="lname">状态与记忆层</span>
+            <span class="ltech">Spatial State 一等公民 · 不引第二套向量库</span>
+          </div>
+          <div class="mods">
+            <span class="mod navy">会话状态 <span class="fn mono">scene_solution</span>（JSON 列 + version）</span>
+            <span class="mod navy">LangGraph Checkpointer（会话记忆 / 故障恢复 / HITL）</span>
+            <span class="mod navy">长期知识库 <span class="fn mono">knowledge_doc</span>（VECTOR 列）</span>
+            <span class="mod navy">反馈记忆（用户采纳 / 否决回写）</span>
+          </div>
+        </div>
+        <div class="arrow-down">▼ 持久化 / 索引扫描 ▼</div>
+
+        <!-- L6 -->
+        <div class="layer" style="--lc:var(--l6)">
+          <div class="lhead">
+            <span class="ltag">L6</span>
+            <span class="lname">基础设施层</span>
+            <span class="ltech">OceanBase SeekDB V1.4.0（内核 4.3.5.3 · Built Aug 26 2026 · MySQL 兼容 5.7.25）· Docker 部署</span>
+          </div>
+          <div class="mods">
+            <span class="mod navy">SeekDB：AI 原生混合搜索 · 单引擎统一 relational / vector / text / JSON / GIS 五模</span>
+            <span class="mod navy">SPATIAL KEY（MBR）· VECTOR KEY HNSW（cosine，1024 维）· FULLTEXT ngram · JSON</span>
+            <span class="mod navy">V1.4 要点：官方无 Windows 原生 exe，Windows 走 Docker 服务器模式；二进制 -63.9% / 稳态内存 -73.6% / CPU -70.3%（Rust 重写 MySQL 协议栈）</span>
+            <span class="mod">镜像 <span class="fn mono">quay.io/oceanbase/seekdb:latest</span>（Docker Hub 超时用 quay）</span>
+            <span class="mod">容器 <span class="fn mono">seekdb</span> · named volume <span class="fn mono">seekdb_data:/var/lib/seekdb</span></span>
+            <span class="mod"><span class="fn mono">-e MEMORY_LIMIT=2G</span> · <span class="fn mono">--restart unless-stopped</span></span>
+            <span class="mod">BGE-m3 Embedding · LLM API（豆包/DeepSeek）· 高德开放平台 · ETL 管线</span>
+          </div>
+          <div class="env-strip">
+            <span class="env-title">本机实例（Docker，只读事实）</span>
+            <span class="env-item">端口 <b>2881</b>（容器映射）</span>
+            <span class="env-item">用户 <b>root</b> 空密码</span>
+            <span class="env-item">连接 <b>--ssl-mode=DISABLED</b></span>
+            <span class="env-item">容器 <b>seekdb</b></span>
+            <span class="env-item">volume <b>seekdb_data</b></span>
+            <span class="env-item"><b>MEMORY_LIMIT=2G</b> · cpu_count=4</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 7 步闭环色带 -->
+      <aside class="loop">
+        <div class="ltitle">高德 7 步闭环<br><span style="font-weight:400;font-size:10.5px;color:var(--ink-2)">落点映射</span></div>
+        <div class="step s1"><span class="n">1 理解意图</span><span class="where">L2 意图理解器</span></div>
+        <div class="step s2"><span class="n">2 建立约束</span><span class="where">L2 约束建模器（输入含 L1 手势）</span></div>
+        <div class="step s3"><span class="n">3 生成候选</span><span class="where">L3 Skill → L4 多模检索</span></div>
+        <div class="step s4"><span class="n">4 空间计算</span><span class="where">L4 路由 OB / 高德 API</span></div>
+        <div class="step s5"><span class="n">5 数据决策</span><span class="where">L4 特征加工 + L2 决策综合</span></div>
+        <div class="step s6"><span class="n">6 地图表达</span><span class="where">L4 Map Spec → L1 JS/Loca</span></div>
+        <div class="step s7"><span class="n">7 用户反馈</span><span class="where">L1 采集 → L2 状态管理器局部重算</span></div>
+      </aside>
+    </div>
+
+    <div class="legend">
+      <span class="item"><span class="swatch" style="background:var(--l1)"></span>L1 表达</span>
+      <span class="item"><span class="swatch" style="background:var(--l2)"></span>L2 大脑（LangGraph）</span>
+      <span class="item"><span class="swatch" style="background:var(--l3)"></span>L3 技能 / MCP</span>
+      <span class="item"><span class="swatch" style="background:var(--l4)"></span>L4 数据与计算服务</span>
+      <span class="item"><span class="swatch" style="background:var(--l5)"></span>L5 状态与记忆</span>
+      <span class="item"><span class="swatch" style="background:var(--l6)"></span>L6 SeekDB 基础设施</span>
+      <span class="item">↧ 向下：请求 / SQL / 写回　　⤾ 侧向：L2 读写 L5，L4 访问 L6，L4 调高德网关</span>
+    </div>
+  </section>
+
+  <!-- ============ 3. 三条核心设计主线 ============ -->
+  <section>
+    <div class="sec-title">三条核心设计主线 <span class="en">Three Design Pillars</span></div>
+    <div class="pillars">
+      <div class="pillar p1">
+        <span class="tag">PILLAR 01</span>
+        <h3>空间计算下推</h3>
+        <p>空间 / 标量 / 全文 / 向量 / JSON <b>五模一条 SQL</b> 进 SeekDB；距离、包含、连接、聚合、缓冲区全部由数据库内核完成。</p>
+        <p><b>铁律：LLM 不算几何</b>——不写坐标、不猜距离、不凭文字判断顺路。</p>
+        <div class="codebox">WHERE cat=:cat AND status=1 AND rating&gt;=4.0
+  AND _ST_Dwithin(loc, ST_GeomFromText('POINT(...)'), 0.02)
+  AND MATCH(name) AGAINST(:kw IN BOOLEAN MODE)
+ORDER BY cosine_distance(emb,:qvec)
+APPROXIMATE LIMIT 60;</div>
+      </div>
+      <div class="pillar p2">
+        <span class="tag">PILLAR 02</span>
+        <h3>结构化空间状态</h3>
+        <p>Spatial State 是 JSON 一等公民：<code>session_id / scene / version / constraints / plan / candidates / layers / decision</code>。</p>
+        <p>每个 <code>steps[i]</code> / <code>layers[j]</code> 带 <code>derived_from</code> 依赖图；用户改约束 → 反向标记 <code>stale</code> → 仅重算受影响节点，未变节点复用缓存。</p>
+      </div>
+      <div class="pillar p3">
+        <span class="tag">PILLAR 03</span>
+        <h3>Skill 插件化</h3>
+        <p><code>SpatialSkill</code>（ABC + Pydantic v2）统一基类；<code>@register_skill</code> 装饰器 + <code>discover()</code> 包扫描；Pydantic schema 自动导出 MCP tools/list。</p>
+        <p><b>新增场景核心零改动</b>：只加一个 Skill 包 + 增量 migration + 图层 JSON，不动 L2 状态图骨架与 Query Builder。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3.5 轻量 Web 演示层 ============ -->
+  <section>
+    <div class="sec-title">轻量 Web 演示层 · 单页工作台 MVP <span class="en">Replaceable Shell · 轻 Web、重内核</span></div>
+
+    <!-- 三栏线框 -->
+    <div class="wireframe">
+      <div class="wf-topbar">
+        <span>GeoMind ● 选址分析 ● 会话 sess_001</span>
+        <span>⏸ 中断　⤓ 导出报告</span>
+      </div>
+      <div class="wf-body">
+        <div class="wf-col">
+          <h4>对话栏（~22%）</h4>
+          <div class="msg user">用户：这个圈里找适合开精品咖啡的铺位，年轻人多、租金别超 9 万…</div>
+          <div class="msg">助手：已识别「智能选址」场景，空间 / 标量 / 语义 / 时间四类约束已建立。</div>
+          <div class="wf-chips">
+            <span class="wf-chip">租金 ≤ 9 万</span>
+            <span class="wf-chip">半径 1.5km</span>
+            <span class="wf-chip">晚高峰</span>
+          </div>
+          <div style="font-size:10.5px;color:var(--navy);margin-top:6px;">Agent 过程可观测：</div>
+          <div class="wf-tool">▸ multi_modal_search　182ms</div>
+          <div class="wf-tool">▸ spatial_join_agg　96ms</div>
+          <div class="wf-tool">▸ amap_isochrone　310ms</div>
+          <div style="margin-top:8px;font-size:10.5px;color:var(--ink-2);">[ 输入消息… ⏎ ]</div>
+        </div>
+
+        <div class="wf-map">
+          <div class="wf-tools">🛈 框选　● 点选　◎ 画圈　✥ 拖拽</div>
+          <div class="wf-heat" style="left:18%;top:30%;width:160px;height:120px;"></div>
+          <div class="wf-iso" style="left:48%;top:22%;width:180px;height:150px;"></div>
+          <div class="wf-marker" style="left:28%;top:42%;"><span class="lbl">候选1 · 0.73</span></div>
+          <div class="wf-marker" style="left:56%;top:55%;"><span class="lbl">候选2 · 0.68</span></div>
+          <div class="wf-marker" style="left:40%;top:68%;"><span class="lbl">候选3 · 0.61</span></div>
+          <div class="wf-route" style="left:56%;top:58%;width:120px;transform:rotate(-20deg);"></div>
+          <div class="wf-layerbar">
+            ☑ POI　☑ 热力　☑ 等时圈　☐ 轨迹　☑ 路径
+          </div>
+        </div>
+
+        <div class="wf-col">
+          <h4>结果面板（~24%）</h4>
+          <div style="font-size:10.5px;color:var(--navy);margin-bottom:4px;">[ Top 候选 ]</div>
+          <div class="wf-rank"><span>1 万达临街</span><span class="score">0.73</span></div>
+          <div class="wf-rank"><span>2 桐梓林</span><span class="score">0.68</span></div>
+          <div class="wf-rank"><span>3 建设路</span><span class="score">0.61</span></div>
+          <div style="font-size:10.5px;color:var(--navy);margin:8px 0 4px;">关键指标：</div>
+          <div style="font-size:10.8px;color:var(--ink-2);line-height:1.6;">客流 4200 / 15min<br>竞品 2 家（500m）<br>临街档 W1 · 覆盖白领晚高峰</div>
+          <div style="font-size:10.5px;color:var(--navy);margin:8px 0 4px;">结论：</div>
+          <div style="font-size:10.8px;color:var(--ink-2);">客流与可达性双高、竞品密度低、租金在预算内。</div>
+        </div>
+      </div>
+      <div class="wf-progress">
+        <span><span class="step-done">✓ 意图</span></span>
+        <span><span class="step-done">✓ 约束</span></span>
+        <span><span class="step-done">✓ 计划</span></span>
+        <span><span class="step-run">◌ 工具调用</span></span>
+        <span>重算：仅 s4 打分 + 图层</span>
+        <span class="recompute">[ 中断 ]　[ 导出 ]</span>
+      </div>
+    </div>
+
+    <div class="three-no">
+      <b>三不原则（前端边界）：</b>
+      ① 不直连 OceanBase　② 不持高德服务端密钥　③ 不做空间计算 / 业务规则 / 打分裁决——前端只采集手势与展示结果。
+    </div>
+
+    <div class="contract">
+      <div class="box">
+        <h4>REST 端点（FastAPI）</h4>
+        <table class="rest-table">
+          <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+          <tr><td class="m">POST</td><td class="path">/api/sessions</td><td>创建会话（LangGraph thread）</td></tr>
+          <tr><td class="m">GET</td><td class="path">/api/sessions/{id}</td><td>状态快照（权威在后端）</td></tr>
+          <tr><td class="m">POST</td><td class="path">…/messages</td><td>自然语言，异步走图</td></tr>
+          <tr><td class="m">GET</td><td class="path">…/events　(SSE)</td><td>SSE 事件流，支持断线续传</td></tr>
+          <tr><td class="m">POST</td><td class="path">…/feedback</td><td>手势 / 约束回传（draw_polygon / point_select / constraint_edit …）</td></tr>
+          <tr><td class="m">POST</td><td class="path">…/interrupts/{decision}</td><td>HITL 确认 / 消歧（LangGraph resume）</td></tr>
+          <tr><td class="m">GET</td><td class="path">…/layers/{id}</td><td>图层 GeoJSON FeatureCollection</td></tr>
+          <tr><td class="m">GET</td><td class="path">…/report</td><td>多模态报告导出（html / docx / xlsx）</td></tr>
+          <tr><td class="m">GET</td><td class="path">/api/skills</td><td>SkillRegistry 可挂载能力一览</td></tr>
+          <tr><td class="m">—</td><td class="path">/mcp</td><td>MCP Streamable HTTP（与 REST 同内核）</td></tr>
+        </table>
+      </div>
+      <div class="box">
+        <h4>SSE 事件流标签</h4>
+        <div class="sse-chips">
+          <span class="sse-chip">token</span>
+          <span class="sse-chip">intent.updated</span>
+          <span class="sse-chip">constraints.updated</span>
+          <span class="sse-chip">plan.updated</span>
+          <span class="sse-chip">tool.start</span>
+          <span class="sse-chip">tool.end</span>
+          <span class="sse-chip">state.delta</span>
+          <span class="sse-chip">layer.update</span>
+          <span class="sse-chip">map.view</span>
+          <span class="sse-chip">interrupt.required</span>
+          <span class="sse-chip">message.end</span>
+        </div>
+        <div class="mapspec-note">
+          <b style="color:#ffd27a;">Map Spec 声明式渲染：</b>后端只下发图层 / 要素描述 JSON，前端按 <code>kind</code> 注册渲染器（poi / heatmap / polygon / isochrone / route / trajectory / grid / marker），前端零业务逻辑。
+        </div>
+      </div>
+    </div>
+
+    <div class="three-tier">
+      <div class="tier" style="--tc:var(--l1)">
+        <h4>🖥 前端（Web 壳）</h4>
+        <ul>
+          <li>自然语言输入采集、原文上报</li>
+          <li>地图手势采集（框选 / 点选 / 画圈 / 拖拽）</li>
+          <li>按 Map Spec kind 渲染图层</li>
+          <li>约束 chips 展示与点改入口</li>
+          <li>Agent 过程可观测（订阅 SSE）</li>
+        </ul>
+      </div>
+      <div class="tier" style="--tc:var(--l2)">
+        <h4>⚙ 后端（FastAPI + LangGraph）</h4>
+        <ul>
+          <li>手势 → 结构化约束转译与裁决</li>
+          <li>意图理解 / 规划 / Skill 编排（L2·L3）</li>
+          <li>Query Builder 编译 SQL（前端不碰 SQL）</li>
+          <li>状态权威存储、HITL interrupt</li>
+          <li>高德服务端 key 持有与代理 / 限流</li>
+        </ul>
+      </div>
+      <div class="tier" style="--tc:var(--l6)">
+        <h4>🗄 数据库（SeekDB V1.4 Docker）</h4>
+        <ul>
+          <li>五模一体存储（标量 + POINT + VECTOR + FULLTEXT + JSON）</li>
+          <li>SPATIAL KEY（MBR）+ HNSW cosine + ngram 全文</li>
+          <li>空间连接与聚合（ST_Contains / GROUP BY）</li>
+          <li>候选池批量筛选与打分取数</li>
+          <li>scene_solution / knowledge_doc 持久化（named volume seekdb_data）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="dual-track">
+      <div class="track lite">
+        <h4>极速版（兜底，1–2 天）</h4>
+        <div class="tag">Streamlit / Gradio · 与官方 TravelAssist demo 同款</div>
+        <p>高德地图经 <code>components.html</code> / iframe 嵌入；框选 / 拖拽交互弱，定位为<b>数据与链路验证</b>。</p>
+      </div>
+      <div class="track-mid">
+        同一套<br>REST + SSE<br>+ Map Spec<br>+ GeoJSON<br>切换零成本
+      </div>
+      <div class="track pro">
+        <h4>正式版（推荐）</h4>
+        <div class="tag">Vue3 + Vite + TS + Pinia + 高德 JS API 2.0 + Loca</div>
+        <p>交互演示 / 答辩占比高时启用；接口 / 命令行评测场景只交后端 + MCP，web/ 可不启动。</p>
+      </div>
+    </div>
+
+    <div class="secret-note">
+      🔑 <b>密钥安全：</b>JS API key 走<b>域名白名单 Referer 防盗 + 后端数字签名</b>（jscodeard）；服务端 key（搜索 / 算路 / 逆地理 / 等时圈）<b>只在后端</b>，前端一律经代理端点访问，统一做缓存与限流。
+    </div>
+  </section>
+
+  <!-- ============ 4. 两条端到端数据流 ============ -->
+  <section>
+    <div class="sec-title">端到端数据流 <span class="en">Two End-to-End Traces</span></div>
+    <div class="flows">
+
+      <div class="flow">
+        <h3>① 智能选址<span class="who">自然语言 + 地图圈选 → 依赖图局部重算</span></h3>
+        <div class="steps">
+          <div class="stp llm"><span class="sn">1</span>用户输入<span class="who2">自然语言 + 地图圈选区域</span></div>
+          <div class="stp llm"><span class="sn">2</span>意图识别 + 四类约束建模<span class="who2">L2 大脑</span></div>
+          <div class="stp"><span class="sn">3</span>选址 Skill <code>build_plan</code> 生成 DAG<span class="who2">L3 场景 Skill</span></div>
+          <div class="stp ob"><span class="sn">4</span>多模检索候选铺位<span class="who2">一条 SQL：空间圈 + 标量 + 全文 + 向量 + JSON</span></div>
+          <div class="stp ob"><span class="sn">5</span>与竞品 / 客流格空间连接<span class="who2"><code>ST_Contains</code> + <code>GROUP BY grid_id</code></span></div>
+          <div class="stp amap"><span class="sn">6</span>步行可达性<span class="who2">高德等时圈 → <code>ST_Contains</code> 批量筛候选</span></div>
+          <div class="stp llm"><span class="sn">7</span>决策特征打分排名<span class="who2">三维加权 → decision</span></div>
+          <div class="stp"><span class="sn">8</span>MapSpec 渲染<span class="who2">候选点 + 热力 + 等时圈</span></div>
+          <div class="stp llm"><span class="sn">9</span>改约束 → stale 重算<span class="who2">依赖图局部重算 / 增量渲染</span></div>
+        </div>
+      </div>
+
+      <div class="flow">
+        <h3>② 多模混合检索<span class="who">"找附近适合自习安静能停车的咖啡馆"</span></h3>
+        <div class="steps">
+          <div class="stp llm"><span class="sn">1</span>用户 query<span class="who2">文本 + 地图上下文</span></div>
+          <div class="stp llm"><span class="sn">2</span>拆出空间 / 标量 / 语义 / 时间约束<span class="who2">L2 约束建模器</span></div>
+          <div class="stp"><span class="sn">3</span>语义文本经 BGE-m3 转向量<span class="who2">1024 维 embedding</span></div>
+          <div class="stp"><span class="sn">4</span>Query Builder 编译 SQL<span class="who2">静态校验 + 小样本 dry-run</span></div>
+          <div class="stp ob"><span class="sn">5</span>OB 混合查询<span class="who2"><code>APPROXIMATE LIMIT</code> + 球面距离 + 语义距离</span></div>
+          <div class="stp amap"><span class="sn">6</span>逆地理编码与详情兜底<span class="who2">仅对展示候选调用，避免全量耗配额</span></div>
+          <div class="stp"><span class="sn">7</span>MapSpec 标点 + 排名列表<span class="who2">L1 高德 JS/Loca</span></div>
+          <div class="stp ob"><span class="sn">8</span>反馈回写<span class="who2">偏好与样本 → <code>knowledge_doc</code></span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ 5. OceanBase 能力徽章 ============ -->
+  <section>
+    <div class="sec-title">SeekDB V1.4.0 能力矩阵 <span class="en">MySQL 兼容 5.7.25 · Docker 容器 · 同库五模 · 本机已实跑复验</span></div>
+    <div class="ob-grid">
+      <div class="ob-card">
+        <div class="t">空间列 · 标准几何类型</div>
+        <div class="d"><span class="mono">POINT / LINESTRING / POLYGON / MULTI…</span>，建列 <code>NOT NULL</code>（<b>SRID 0</b>，坐标按 WGS84 经纬度存值）。<br><span style="font-size:10.8px;color:var(--ink-2);">本机 SRS 表仅 SRID 0；声明 SRID 4326 仍报 <b>ERROR 3548</b>，注册方式待实测。</span></div>
+      </div>
+      <div class="ob-card">
+        <div class="t">SPATIAL KEY（MBR）</div>
+        <div class="d"><span class="mono">SPATIAL KEY idx (col)</span>；关系谓词 <span class="mono">ST_Intersects / ST_Contains / ST_Within / ST_Buffer</span>。</div>
+      </div>
+      <div class="ob-card">
+        <div class="t">距离圈选（已实测）</div>
+        <div class="d">OB 私有 <span class="mono">_ST_Dwithin(g1,g2,d)</span>（<b>d 单位是度</b>）；<span class="mono">ST_Distance_Sphere</span> 返回米（SRID 0 下 A=0 / B=1478.8m 实测正确）。</div>
+      </div>
+      <div class="ob-card">
+        <div class="t">VECTOR KEY + HNSW（cosine，已实测）</div>
+        <div class="d"><span class="mono">VECTOR(1024)</span> BGE-m3 直用；ANN 写法 <span class="mono">ORDER BY cosine_distance(emb,:q) APPROXIMATE LIMIT k</span>；EXPLAIN 命中 <b>VECTOR INDEX SCAN</b>。</div>
+      </div>
+      <div class="ob-card" style="border-left:4px solid var(--teal);">
+        <div class="t">混合查询 · ADAPTIVE 预过滤（V1.4 复验通过）</div>
+        <div class="d">执行计划 <span class="mono">SUBPLAN FILTER → VECTOR INDEX ADAPTIVE SCAN (PRE-FILTER) → TABLE GET 回表</span>，向量扫描同步做空间/标量/全文预过滤。<br><span style="font-size:10.8px;color:var(--ink-2);">两阶段写法（圈选极小场景显式先物化候选）保留为兜底。</span></div>
+      </div>
+      <div class="ob-card" style="border-left:4px solid var(--orange);">
+        <div class="t">第五模 · 全文检索（ngram，已实测）</div>
+        <div class="d"><span class="mono">FULLTEXT KEY ... WITH PARSER ngram PARSER_PROPERTIES=(ngram_token_size=2)</span> + <span class="mono">MATCH ... AGAINST</span>，中文「咖啡」score 0.240 命中。</div>
+      </div>
+      <div class="ob-card" style="border-left:4px solid #c0392b;">
+        <div class="t">🚫 函数边界：交集 / 合并多边形不可下推</div>
+        <div class="d"><b>V1.4 确认不存在：<span class="mono">ST_Intersection</span> / <span class="mono">ST_Union_Agg</span>（ERROR 1305）</b>——交并类多边形运算走应用层 Shapely 或高德侧。<br><span style="font-size:10.8px;color:var(--ink-2);">可下推：<span class="mono">ST_Distance_Sphere / ST_Distance / _ST_Dwithin / ST_Intersects / ST_Contains / ST_Within / ST_Buffer / ST_Centroid / ST_Area</span>。</span></div>
+      </div>
+      <div class="ob-card" style="border-left:4px solid #c0392b;">
+        <div class="t">🚫 DDL 禁项（单机版 V1.4）</div>
+        <div class="d"><b>禁写</b>：<span class="mono">REPLICA_NUM</span>（库/表均 ERROR 1064）、<span class="mono">ORGANIZATION INDEX / TABLET_SIZE / USE_BLOOM_FILTER / BLOCK_SIZE</span> 等分布式选项；向量索引 <span class="mono">LIB=VSAG</span> 可省。<br><span style="font-size:10.8px;color:var(--ink-2);">干净模板以架构文档 §6.3 正式 DDL 为准（原 <code>backup/v140_schema.sql</code> 已清理）。</span></div>
+      </div>
+      <div class="ob-card">
+        <div class="t">空间连接与聚合</div>
+        <div class="d"><code>… JOIN grid ON ST_Contains(g.poly, s.loc) GROUP BY grid_id</code>；等时圈多边形回传批量筛选。<br><span style="font-size:10.8px;color:var(--ink-2);">实测（5 行样本）：聚合结果正确，但 EXPLAIN = NESTED-LOOP JOIN + 双侧全扫，<b>未走空间索引</b>；10 万级索引加速待复验。</span></div>
+      </div>
+      <div class="ob-card">
+        <div class="t">JSON 列</div>
+        <div class="d"><span class="mono">JSON</span> 类型 + <span class="mono">JSON_EXTRACT</span> / <span class="mono">-&gt;</span> 操作符；attrs 灵活属性直接入库。</div>
+      </div>
+      <div class="ob-card">
+        <div class="t">同库五模一体行</div>
+        <div class="d">一行 <code>dim_poi</code> 同时承载标量 attrs + <code>POINT</code> + <code>VECTOR(1024)</code> + <code>FULLTEXT</code> + <code>JSON</code>，不引第二套向量库。</div>
+      </div>
+      <div class="ob-card">
+        <div class="t">部署形态（Docker）</div>
+        <div class="d">镜像 <span class="mono">quay.io/oceanbase/seekdb:latest</span> · 容器 <span class="mono">seekdb</span> · volume <span class="mono">seekdb_data:/var/lib/seekdb</span> · <span class="mono">-e MEMORY_LIMIT=2G</span> · <span class="mono">--restart unless-stopped</span>。<br><span style="font-size:10.8px;color:var(--ink-2);">V1.3 Windows 原生（D:\seekdb）已停止、改手动、可回滚；两实例共用 2881，同一时刻只能起一个。</span></div>
+      </div>
+    </div>
+
+    <!-- Docker 运维小条 -->
+    <div class="secret-note" style="margin-top:12px;">
+      🐳 <b>Docker 运维：</b><code>docker start/stop/restart seekdb</code> · <code>docker logs -f seekdb</code>（等 "Seekdb started"）· <code>docker exec -it seekdb sh</code> · 备份 <code>mysqldump -h 127.0.0.1 -P 2881 -uroot --ssl-mode=DISABLED --databases geomind</code>。
+      自启前提：Docker Desktop 配置为开机自启（<code>--restart unless-stopped</code> 仅在 Docker Desktop 运行时生效）。
+      回滚：<code>docker stop seekdb</code> → <code>Start-Service seekdb</code> 即恢复 V1.3 原生。
+    </div>
+  </section>
+
+  <!-- ============ 6. 场景矩阵 ============ -->
+  <section>
+    <div class="sec-title">可扩展场景矩阵 <span class="en">Skill 包 + （可选）migration + 图层模板 · Hover 查看明细</span></div>
+    <div class="scenes">
+
+      <div class="scene">POI 智能检索
+        <div class="tip"><b>所需原子 Skill：</b>地理编码 / 多模检索 / 详情
+          <div class="row"><b>OB 数据：</b><code>dim_poi</code> 混合 SQL</div>
+          <div class="row"><b>高德 API：</b>搜索 / 逆地理兜底</div>
+        </div>
+      </div>
+
+      <div class="scene">智能选址
+        <div class="tip"><b>所需原子 Skill：</b>检索 / 空间连接 / 聚合 / 评分
+          <div class="row"><b>OB 数据：</b><code>fact_store</code> + grid + 竞品 <code>ST_</code> 聚合</div>
+          <div class="row"><b>高德 API：</b>等时圈 / 路径规划</div>
+        </div>
+      </div>
+
+      <div class="scene">客流洞察
+        <div class="tip"><b>所需原子 Skill：</b>时空聚合 / 热力
+          <div class="row"><b>OB 数据：</b><code>fact_traffic_grid GROUP BY</code></div>
+          <div class="row"><b>高德 API：</b>行政边界</div>
+        </div>
+      </div>
+
+      <div class="scene">人群分析
+        <div class="tip"><b>所需原子 Skill：</b>画像 + 区域统计
+          <div class="row"><b>OB 数据：</b>人群特征表 + 空间连接</div>
+          <div class="row"><b>高德 API：</b>行政边界</div>
+        </div>
+      </div>
+
+      <div class="scene">可达性分析
+        <div class="tip"><b>所需原子 Skill：</b>等时圈 / 路径矩阵
+          <div class="row"><b>OB 数据：</b>结果缓存 + <code>ST_Contains</code></div>
+          <div class="row"><b>高德 API：</b>路径规划 / 距离矩阵</div>
+        </div>
+      </div>
+
+      <div class="scene">轨迹分析
+        <div class="tip"><b>所需原子 Skill：</b>围栏 / 纠偏 / OD
+          <div class="row"><b>OB 数据：</b>轨迹表 + ST 关系</div>
+          <div class="row"><b>高德 API：</b>猎鹰轨迹</div>
+        </div>
+      </div>
+
+      <div class="scene">门店运营
+        <div class="tip"><b>所需原子 Skill：</b>商圈 / 对比 / 预警
+          <div class="row"><b>OB 数据：</b>指标聚合 + 3km 围栏</div>
+          <div class="row"><b>高德 API：</b>天气 / 路况</div>
+        </div>
+      </div>
+
+      <div class="scene">文旅行程
+        <div class="tip"><b>所需原子 Skill：</b>POI 检索 + 路径排序
+          <div class="row"><b>OB 数据：</b>POI + 向量语义</div>
+          <div class="row"><b>高德 API：</b>多模式路径规划</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ 7. 页脚 ============ -->
+  <footer>
+    <div>
+      <b>数据来源：</b>OceanBase 官方文档（空间关系 / 空间运算 / 向量索引 V4.3–V4.4）· <b>SeekDB V1.4.0 Docker 实测报告（2026-10-15，以实测为准）</b> · OceanBase 软件中心 en.oceanbase.com/softwarecenter · seekdb.ai / docs.seekdb.ai · 高德开放平台（MCP Server / 千舆空间智能方案）· 学术项目 MapAgent (arXiv 2509.05933) / GeoGPT / Mapbox MCP · LangGraph Checkpointers & Interrupts。
+    </div>
+    <div style="text-align:right;">
+      详见 <b>GeoMind架构设计文档.md</b>（v1.3 · 含第 9 章轻量 Web 演示层）<br>
+      GeoMind © 2026 · 2026 OceanBase 数据库大赛 · 高德赛道 · 架构依据 v1.3 · 环境 SeekDB V1.4.0（Docker）
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# ---- 工具 / 运行时产物 ----
+.workbuddy/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ---- 前端 ----
+node_modules/
+dist/
+build/
+.next/
+
+# ---- 敏感信息 ----
+.env
+.env.local
+*.key
+*.pem
+*credential*
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 日志 ----
+*.log
+logs/
