@@ -1,0 +1,52 @@
+# GeoMind 编排（架构 §9.5 末句「用 profiles 控制 web 可选启用」+ §10 目录树第 1156 行）。
+#
+# 默认只起核心必起的 seekdb；演示壳 web 是可选的：
+#   docker compose up -d                    → 只有数据库
+#   docker compose --profile web up -d      → 再加 nginx 托管的前端（:8001）
+#
+# 数据边界（本文件最硬的一条）：`seekdb_data` 声明为 external —— compose **不拥有**这个卷，
+# `docker compose down` 不会删它。现役卷里是 2.2G 实测数据（store/ + .initialized 都在卷内），
+# 所以换容器不迁移、不丢数据。
+#
+# 后端不在这里：venv 跑在宿主机（演示口径，也满足 §9.8「零浏览器、零 web 进程」的可摘除性）。
+
+services:
+  seekdb:
+    image: quay.io/oceanbase/seekdb:latest
+    container_name: seekdb
+    restart: unless-stopped
+    ports:
+      - "2881:2881"
+    environment:
+      MEMORY_LIMIT: "2G"          # §8 第 541 行的规格口径
+      REPORTER: docker-seekdb     # 与现役容器逐项对齐（docker inspect 实测）
+    volumes:
+      - seekdb_data:/var/lib/seekdb
+    healthcheck:
+      # 镜像里带 mysqladmin（容器内实测输出 "mysqld is alive"），比 TCP 探活更能判「能查询」
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-P", "2881", "-uroot",
+             "--connect-timeout=3", "-s"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  web:
+    profiles: ["web"]
+    build:
+      context: ./web
+      args:
+        VITE_AMAP_KEY: ${VITE_AMAP_KEY:-}   # 只传变量名，值来自宿主环境；不注入就是 SVG 降级档
+    container_name: geomind-web
+    restart: unless-stopped
+    ports:
+      - "8001:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux 引擎上也要能解析宿主机后端
+    depends_on:
+      seekdb:
+        condition: service_started           # web 只经 /api 反代打后端，不直接碰库
+
+volumes:
+  seekdb_data:
+    external: true

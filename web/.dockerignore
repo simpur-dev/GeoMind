@@ -1,0 +1,11 @@
+# 构建上下文瘦身 + key 合规（铁律：任何有效 key 只进 .env，不进镜像层也不入库）
+node_modules
+dist
+.env
+.env.local
+.env.*
+!.env.example
+*.tsbuildinfo
+coverage
+Dockerfile
+.dockerignore
