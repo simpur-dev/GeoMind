@@ -12,6 +12,12 @@ interrupt 态都在，见 backend/db/checkpoint_ob.py）。业务态（Spatial S
 
 services 通过 build_graph(ctx) 的闭包注入——不用模块级全局（多会话会串，
 本项目实测踩过）。
+
+模块边界（架构 §10 的 brain/ 五件套，卡 7 ③ 纯搬移对齐）：约束建模在 `constraints.py`、
+决策综合在 `synthesize.py`、意图在 `intent.py`；本模块只留图骨架——`BrainState`、
+checkpointer 选择、节点包装与装配、`run_query/resume_query`。
+`state_manager.py` 没建：「依赖图 / stale 标记 / 局部重算」三件事现在真的住在
+`backend/state/repository.py`（`mark_stale` / `replan`），再包一层等于制造第二处真相。
 """
 from __future__ import annotations
 
@@ -20,14 +26,14 @@ from typing import Any, TypedDict, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from backend.api.contracts.constraints import ConstraintOverrides
 from backend.api.contracts.map_spec import LayerSource, LayerSpec
 from backend.api.sse_bus import emit
+from backend.brain.constraints import constraints_node as _constraints_node
 from backend.brain.intent import IntentResult, make_intent_parser
+from backend.brain.synthesize import decide_node as _decide_node
 from backend.config import get_settings
 from backend.db.checkpoint_ob import make_checkpointer
 from backend.db.connection import OBConnection
-from backend.llm.gateway import LLMMessage, get_gateway
 from backend.skills.base import SkillContext
 from backend.skills.registry import SkillRegistry
 from backend.state.models import Evidence, SpatialState, StepNode
@@ -92,59 +98,10 @@ def _intent_node(state: BrainState, ctx: SkillContext) -> BrainState:
     return {"intent": result.to_dict()}
 
 
-def _constraints_node(state: BrainState, ctx: SkillContext) -> BrainState:
-    slots = (state.get("intent") or {}).get("slots", {})
-    spec = {
-        "center": tuple(slots["center"]) if slots.get("center") else None,
-        "radius_m": slots.get("radius_m"),
-        "polygon_wkt": slots.get("polygon_wkt"),
-        "category_id": slots.get("category_id"),
-        "min_rating": 4.0,
-        "keywords": slots.get("keywords", []),
-        "query_text": slots.get("query_text"),
-        "time_bucket": "workday_evening",
-        "limit": 10,
-        # 「时间约束」两类字段口径严格分开（架构 §2.2 L2 约束建模器）：
-        #   time_bucket = 客流时段（workday_evening 等，下推 fact_traffic_grid）
-        #   iso_minutes / travel_mode = 等时圈时间预算与出行方式（下发 reachability）
-        # 这两个键由意图器填（规则/LLM 同契约，卡 4），缺省即 None=用户没提；
-        # candidates 节点据其有无决定「反哺检索」还是「仅展示」（卡 5，架构 §7）。
-        # chips 点改是第三个来源（卡 6）。
-        "iso_minutes": slots.get("iso_minutes"),
-        "travel_mode": slots.get("travel_mode"),
-    }
-    # chips 点改（卡 6，§9.2）：组装完再覆盖同名键，缺省口径仍由上面这段定。
-    # 生效范围取「ConstraintOverrides 声明的键 ∩ 已装配的 spec ∩ 本轮带来的键」：
-    # 白名单只有 ConstraintOverrides 一处定义（§9.6 裁决全在后端），绕过端点塞进来的
-    # 陌生键（含 center / keywords / time_bucket）也污染不了 spec。无覆盖时整段空转。
-    overrides = state.get("spec_overrides") or {}
-    for k in overrides.keys() & ConstraintOverrides.model_fields.keys() & spec.keys():
-        spec[k] = overrides[k]
-    emit(ctx, "constraints.updated", spec)
-    return {"spec": spec}
-
-
-def _decide_node(state: BrainState, ctx: SkillContext) -> BrainState:
-    llm = get_gateway()
-    aggs = state.get("aggs") or []
-    cands = state.get("candidates") or []
-    if not aggs:
-        return {"decision": {"summary": "该范围内没有可用网格，建议扩大范围或更换类目。"}}
-    top = max(aggs, key=lambda a: (a.get("flow") or 0))
-    feats = (f"候选 POI {len(cands)} 个；客流最高网格 {top['grid_id']}"
-             f"（flow={top.get('flow')}，POI {top.get('poi_cnt')} 个，"
-             f"评分 {top.get('avg_rating')}）")
-    try:
-        prompt = ("你是连锁门店选址分析师。基于以下决策特征，给出一句选址结论与理由："
-                  "直接说推荐哪个网格、为什么，不超过 80 字，不要罗列选项或反问。\n"
-                  f"FEATURES: {feats}")
-        text = llm.chat([LLMMessage(role="user", content=prompt)], temperature=0.0)
-    except Exception as exc:  # noqa: BLE001 - LLM 不可达/报错时降级为模板结论，7 步图不中断
-        text = (f"结论：基于决策特征给出可解释建议 —— {feats}。"
-                f"（真实 LLM 网关暂不可用，已降级为模板结论：{exc}）")
-    decision = {"summary": text, "top_grid": top}
-    emit(ctx, "decision.updated", decision)
-    return {"decision": decision}
+# 约束建模与决策综合的函数体住在 brain/constraints.py 与 brain/synthesize.py
+# （§10 目录对齐，卡 7 ③ 原样搬移，函数体一字未改）；本模块按既有别名
+# `_constraints_node` / `_decide_node` 导入，`from backend.brain.graph import _constraints_node`
+# 这类既有 import 路径因此一字不改仍可解析。
 
 
 # ---------------------------------------------------------------------------

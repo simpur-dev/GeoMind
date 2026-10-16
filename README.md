@@ -23,6 +23,8 @@
 
 阶段 0 共 8 项验收：**8 / 8 全部完成**。最终验收锚点「多模混合检索最小闭环」已点亮（一条 SQL 四模 24.9 ms）；Map Spec 渲染器 + 前端三栏工作台已落地并经浏览器端到端实测（高德底图 / 无 key 降级双档，对话→地图→框选回传闭环全通）。
 
+任务卡 1-6 把「L4 空间计算 + 等时圈反哺检索 + 约束点改闭环 + 检查点同库持久化」串成一条可解释闭环（真实 key 冒烟：步行 10 分钟圈 2 候选、驾车 15 分钟圈 10 候选，圈外均为 0）。收官卡 7 补完部署面与工程结构：`docker-compose.yml` 用 profiles 让 web 变可选（默认只起 seekdb，`seekdb_data` 声明 `external` → `down` 不删数据，实测五个行数与卷创建时间均未变）；§9.8 可摘除性有全 curl 脚本 `docs/sql/verify_removable.sh` 作为终验证据（零浏览器、零 web 进程）；`backend/brain/` 按 §10 拆出 `constraints.py` / `synthesize.py`（218 用例零改动通过 + 变异检查 4/4）。
+
 | # | 验收项 | 状态 |
 |---|---|---|
 | 1 | Docker 版 SeekDB V1.4.0 + 五模复验 + V1.3 回滚路径 | ✅ 完成 |
@@ -43,6 +45,7 @@
 | [`docs/GeoMind架构设计文档.md`](docs/GeoMind架构设计文档.md) | **权威基线 v1.4**：六层架构、四条铁律、Spatial State Schema、Skill/MCP 插件机制、存储设计、前后端契约、路线图 |
 | [`docs/SeekDB环境实测报告.md`](docs/SeekDB环境实测报告.md) | 实跑结论（**与架构文档冲突时以本报告为准**）：能力矩阵、算子白名单、EXPLAIN 证据、V1.4 迁移记录 |
 | [`docs/开发进度.md`](docs/开发进度.md) | 阶段 0 checklist、环境坐标速查、时间线、风险表、下一步优先级 |
+| [`docs/设计方案-部署与工程收尾.md`](docs/设计方案-部署与工程收尾.md) | 收官卡：compose profiles 可选 web + §9.8 全 curl 终验 + `brain/` 模块化（对齐 §9.5 / §9.8 / §10） |
 | [`docs/设计方案-技能层与状态层骨架.md`](docs/设计方案-技能层与状态层骨架.md) | 应用骨架设计（8 模块 / 不做清单 / 实施步骤 / 测试矩阵） |
 | [`backend/`](backend/) | 后端：Query Builder（三层卡点，含主键点查）+ L4 计算路由 SpatialRouter + 9 Skill + MCP + REST/SSE（图层端点 l_candidates/l_heat/l_iso/l_route）+ LangGraph 7 步（等时圈反哺检索闭环；约束 chips 点改→局部重算闭环；检查点可落同库 SeekDB）+ CLI。218 个 pytest + ruff + mypy 全绿 |
 | [`docs/调研报告-优秀案例.md`](docs/调研报告-优秀案例.md) | 60+ 来源汇编：学术 9 例、工业 5 例、框架选型结论 |
@@ -61,6 +64,14 @@
 
 # 容器运维
 docker start|stop|restart seekdb
+
+# 起库（推荐走 compose：容器名与数据卷与早期 docker run 完全同名，数据不迁移不丢失）
+docker compose up -d                      # 默认只起核心必起的 seekdb（web 是 profile 可选壳）
+docker compose --profile web up -d        # 再加前端壳：:8001 → nginx 托管 dist + /api 反代宿主机 8000
+docker compose down                       # 只停容器；seekdb_data 声明 external，卷不会被删
+
+# §9.8 可摘除性终验（全程 curl，零浏览器、零 web 进程；任一步断言不过即非 0 退出）
+bash docs/sql/verify_removable.sh
 
 # 五模 + 三模复验（7 项）
 Get-Content "docs\sql\verify_v140.sql" -Raw |
@@ -82,6 +93,8 @@ $py = "C:\Users\34928\.workbuddy\binaries\python\versions\3.13.12\python.exe"
 | 数据库 | Docker 容器 `seekdb`，镜像 `quay.io/oceanbase/seekdb:latest`，`-p 2881:2881`，named volume `seekdb_data` |
 | 内核 | `5.7.25-OceanBase seekdb-v1.4.0.0` / OceanBase 4.3.5.3 (r1.4.0.0) |
 | 连接 | 127.0.0.1:2881，root，**空密码**，`--ssl-mode=DISABLED` |
+| 编排 | `docker-compose.yml`：`seekdb`（无 profile，核心必起）+ `web`（`profiles: ["web"]`，默认不起）；卷 `seekdb_data` 声明 `external: true`，`docker compose down` 不删数据（实测卷创建时间未变、`dim_poi` 仍 20000 行） |
+| 从 `docker run` 迁到 compose | 同名容器会冲突：`docker stop seekdb` → `docker rename seekdb seekdb_precompose` → `docker compose up -d`。**rename 而不是 rm** 是留一条回退路；核对五个行数基线无误后，旧容器由你决定何时 `docker rm seekdb_precompose` |
 
 ### 写 SQL 前必看的三条硬约束
 
@@ -111,7 +124,7 @@ $py = "C:\Users\34928\.workbuddy\binaries\python\versions\3.13.12\python.exe"
 
 **三通道平权**（架构 §9.1）：CLI（`python -m backend.demo "查询"`）、REST/SSE（`python -m backend.main`，127.0.0.1:8000）、MCP（`python -m backend.mcp_server.server`，127.0.0.1:8765/mcp）挂在同一套内核契约上，前端可整体摘除。
 
-**质量门**：`pytest` 218 个用例（QueryBuilder 卡点含主键点查 / Skill 对拍 / 空间计算路由与降级链 / 图层端点坐标系与空集 / 等时圈反哺闭环与去重 / 约束点改白名单与重算 / 检查点同库持久化 / 状态局部重算 / 7 步图 / MCP tools/list）+ `ruff check` + `mypy` 全绿；前端 `vue-tsc --noEmit -p tsconfig.app.json`（纳入 17 文件）+ `vite build`；关键断言另做变异检查逐条验红（累计 47 条全被抓住）。Python 3.11 隔离 venv：`D:\python_env\geomind`。
+**质量门**：`pytest` 218 个用例（QueryBuilder 卡点含主键点查 / Skill 对拍 / 空间计算路由与降级链 / 图层端点坐标系与空集 / 等时圈反哺闭环与去重 / 约束点改白名单与重算 / 检查点同库持久化 / 状态局部重算 / 7 步图 / MCP tools/list）+ `ruff check` + `mypy` 全绿；前端 `vue-tsc --noEmit -p tsconfig.app.json`（纳入 17 文件）+ `vite build`；关键断言另做变异检查逐条验红（累计 51 条全被抓住）；§9.8 可摘除性终验 `bash docs/sql/verify_removable.sh` 全绿（全程 curl，零浏览器、零 web 进程）。Python 3.11 隔离 venv：`D:\python_env\geomind`。
 
 ## 路线图
 
