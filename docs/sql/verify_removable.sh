@@ -98,7 +98,7 @@ assert (d.get('changes') or {}).get('radius_m') == 3000, '变更没回显'
 assert len(res.get('candidates') or []) > 0, '重算后候选为空'
 "
 
-step "5b. 陌生键 rent（§9.8 原文示例）→ 必须 422，被白名单拦下"
+step "5b. 陌生键 rent（历史扁平示例的口径）→ 必须 422，被四项白名单拦下"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/sessions/$SID/feedback" \
   -H 'Content-Type: application/json' \
   -d "{\"type\":\"constraint_edit\",\"payload\":{\"changes\":{\"rent\":80000},\"query\":\"$QUERY\"}}" \
