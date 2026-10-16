@@ -20,6 +20,7 @@ from typing import Any, TypedDict, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from backend.api.contracts.constraints import ConstraintOverrides
 from backend.api.contracts.map_spec import LayerSource, LayerSpec
 from backend.api.sse_bus import emit
 from backend.brain.intent import IntentResult, make_intent_parser
@@ -57,6 +58,7 @@ class BrainState(TypedDict, total=False):
     session_id: str
     query: str
     gesture: dict[str, Any] | None
+    spec_overrides: dict[str, Any]  # chips 点改的覆盖值（卡 6）；缺省即无覆盖，行为不变
     intent: dict[str, Any] | None
     spec: dict[str, Any] | None
     candidates: list[dict[str, Any]]
@@ -111,6 +113,13 @@ def _constraints_node(state: BrainState, ctx: SkillContext) -> BrainState:
         "iso_minutes": slots.get("iso_minutes"),
         "travel_mode": slots.get("travel_mode"),
     }
+    # chips 点改（卡 6，§9.2）：组装完再覆盖同名键，缺省口径仍由上面这段定。
+    # 生效范围取「ConstraintOverrides 声明的键 ∩ 已装配的 spec ∩ 本轮带来的键」：
+    # 白名单只有 ConstraintOverrides 一处定义（§9.6 裁决全在后端），绕过端点塞进来的
+    # 陌生键（含 center / keywords / time_bucket）也污染不了 spec。无覆盖时整段空转。
+    overrides = state.get("spec_overrides") or {}
+    for k in overrides.keys() & ConstraintOverrides.model_fields.keys() & spec.keys():
+        spec[k] = overrides[k]
     emit(ctx, "constraints.updated", spec)
     return {"spec": spec}
 
@@ -354,21 +363,36 @@ def _unwrap(result: dict[str, Any], thread_id: str) -> dict[str, Any]:
 
 
 def run_query(query: str, ctx: SkillContext, *, gesture: dict[str, Any] | None = None,
-              thread_id: str = "demo") -> dict[str, Any]:
-    """跑一轮 7 步；intent 触发中断时返回中断信息（含 thread_id 供恢复）。"""
+              thread_id: str = "demo",
+              spec_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """跑一轮 7 步；intent 触发中断时返回中断信息（含 thread_id 供恢复）。
+
+    `spec_overrides`（卡 6）：已经过 `ConstraintOverrides` 校验的约束覆盖值，经图状态
+    注入 `_constraints_node`。与 `gesture` 同规约——**每轮都写**（不传即 None），
+    上一轮的点改不会渗到下一轮新提问；节点里 `or {}` 收到 None 即空转，行为不变。
+    """
     app = build_graph(ctx)
     config = {"configurable": {"thread_id": thread_id}}
-    result = app.invoke({"session_id": ctx.session_id, "query": query, "gesture": gesture}, config)
+    result = app.invoke({"session_id": ctx.session_id, "query": query, "gesture": gesture,
+                         "spec_overrides": spec_overrides}, config)
     return _unwrap(result, thread_id)
 
 
-def resume_query(answer: str, ctx: SkillContext, *, thread_id: str = "demo") -> dict[str, Any]:
-    """用户回答追问后恢复执行。"""
+def resume_query(answer: str, ctx: SkillContext, *, thread_id: str = "demo",
+                 spec_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """用户回答追问后恢复执行。
+
+    `spec_overrides` 与 `run_query` 同义（默认 None → 构造的 `Command` 与改动前一致）；
+    带覆盖时先 `update=` 写通道再从断点续跑——中断发生在 intent，constraints 还没跑，
+    覆盖照样生效。
+    """
     from langgraph.types import Command
 
     app = build_graph(ctx)
     config = {"configurable": {"thread_id": thread_id}}
-    result = app.invoke(Command(resume=answer), config)
+    cmd: Command = (Command(resume=answer) if not spec_overrides else
+                    Command(resume=answer, update={"spec_overrides": spec_overrides}))
+    result = app.invoke(cmd, config)
     return _unwrap(result, thread_id)
 
 

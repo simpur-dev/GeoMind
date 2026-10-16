@@ -10,6 +10,10 @@ Last-Event-ID 断线续传）、feedback 手势回传（draw_polygon / range_dra
 任务卡 2 增量：图层数据补齐 l_iso（等时圈，透传 reachability 的 GCJ-02 内联几何）与
 l_route（路线，WGS84 折点出口转 GCJ-02）；`_poi_coords` / `_grid_coords` 两处历史裸 SQL
 已收口进 QueryBuilder（铁律 1：所有 SQL 经编译 + 三层卡点，见 compile_point_query）。
+
+任务卡 6 增量：feedback 补 `constraint_edit` 分支——约束 chips 从只读变可点改，
+payload `{changes, query}` 经 `ConstraintOverrides` 白名单校验（越界即 422）后
+`run_query(..., spec_overrides=…)` 重跑一轮（架构 §9.2 / §3.1）。
 """
 from __future__ import annotations
 
@@ -21,8 +25,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from backend.api.contracts.constraints import ConstraintOverrides
 from backend.api.geo import (
     gcj02_to_wgs84,
     grid_feature_collection,
@@ -202,6 +207,23 @@ def create_app() -> FastAPI:
             r = run_query(query, _ctx(sid), gesture={"polygon_wkt": wgs}, thread_id=sid)
             out = _chat_out(sid, r)
             return {"accepted": True, "gesture": "draw_polygon", "result": out.model_dump()}
+
+        if kind == "constraint_edit":
+            # 约束 chips 点改（架构 §9.2 + §3.1「约束变更 → 局部重算」）：
+            # 生效语义是「按这组约束重跑一轮」，与 draw_polygon 同款通路。
+            # 422 必须在 run_query **之前**抛出：图一次都没 invoke，状态自然不变。
+            try:
+                ov = ConstraintOverrides.model_validate(body.payload.get("changes"))
+            except ValidationError as exc:
+                raise HTTPException(422, f"约束点改非法: {exc}") from exc
+            changes = ov.model_dump(exclude_none=True)
+            query = str(body.payload.get("query") or "")
+            if not changes or not query.strip():
+                raise HTTPException(422, "constraint_edit 需要 payload.changes（白名单内、非空）"
+                                         "与 payload.query（最近一次输入原文）")
+            r = run_query(query, _ctx(sid), thread_id=sid, spec_overrides=changes)
+            return {"accepted": True, "gesture": "constraint_edit",
+                    "changes": changes, "result": _chat_out(sid, r).model_dump()}
 
         if kind == "range_drag":
             center = body.payload.get("center") or []

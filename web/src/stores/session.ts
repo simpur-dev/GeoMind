@@ -54,7 +54,7 @@ interface SessionState {
   /** 最近一次用户输入的原文（draw_polygon 重跑时随手势一起回传给后端）。 */
   lastQuery: string;
   progress: Record<GraphNode, NodeState>;
-  /** 最近一次 constraints.updated（左栏 chips 展示）。 */
+  /** 约束视图（SSE constraints.updated；点改后再用 graph_state.spec 回读，chips 显示依据）。 */
   constraints: Record<string, unknown> | null;
   /** 权威 Map Spec（后端下发，前端只消费）。 */
   mapSpec: MapSpec | null;
@@ -176,6 +176,29 @@ export const useSessionStore = defineStore("session", {
         const r = await api.feedback(this.sessionId, "draw_polygon",
           { polygon_wkt: wkt, query: this.lastQuery });
         if (r.result) this.applyResult(r.result as ChatResult);
+      } catch (e) {
+        this.fail(e);
+      }
+    },
+
+    /**
+     * 约束点改（架构 §9.2「chips 可直接点改」+ §3.1 闭环）。
+     *
+     * 前端只上报原值：区间与枚举一律不判，越界由后端 422（§9.6 裁决全在后端）。
+     * 生效后按重算结果刷新视图，并回读 `graph_state.spec` 作为 chips 的显示依据
+     * ——看到的是图里真正生效的那组约束，不是前端回显。
+     */
+    async editConstraint(changes: Record<string, unknown>): Promise<void> {
+      if (!this.sessionId || this.busy || !this.lastQuery) return;
+      this.beginRound();
+      this.pushMsg("user", `调整约束：${Object.entries(changes).map(([k, v]) => `${k}=${String(v)}`).join("，")}`);
+      try {
+        const r = await api.feedback(this.sessionId, "constraint_edit",
+          { changes, query: this.lastQuery });
+        if (r.result) this.applyResult(r.result);
+        const snap = await api.getSession(this.sessionId);
+        const spec = (snap.graph_state as { spec?: Record<string, unknown> } | null)?.spec;
+        if (spec) this.constraints = spec;
       } catch (e) {
         this.fail(e);
       }
