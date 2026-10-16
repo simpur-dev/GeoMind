@@ -10,6 +10,7 @@ from backend.db.connection import OBConnection
 from backend.embeddings import get_provider
 from backend.query_builder import QueryBuilder
 from backend.services import ServiceBundle
+from backend.services.amap_gateway import AmapGateway
 from backend.skills.base import SkillContext
 from backend.skills.registry import SkillRegistry
 from backend.state.repository import StateRepository
@@ -22,6 +23,7 @@ def build_services(settings: Settings | None = None) -> ServiceBundle:
         ob=ob,
         query_builder=QueryBuilder(ob, s),
         embedding=get_provider(s),
+        amap=AmapGateway(s),
         state_repo=StateRepository(ob),
         events=get_bus(),
     )

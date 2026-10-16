@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     # ---- 高德网关（无 key 时所有调用降级为库内兜底，不产生外部请求） ----
     amap_key: str = ""
     amap_cache_ttl_s: int = 86400
+    amap_signature_secret: str = ""  # 数字签名私钥（2021-12 后申请的 Web 服务 key 建议）
+    amap_qps: float = Field(default=3.0, ge=0.1, le=50)  # 个人 key 限流口径
 
     # ---- 场景打分权重（site_selection，可解释可复现） ----
     score_weight_semantic: float = 0.35
