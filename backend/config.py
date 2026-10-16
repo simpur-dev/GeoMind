@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     amap_cache_ttl_s: int = 86400
     amap_signature_secret: str = ""  # 数字签名私钥（2021-12 后申请的 Web 服务 key 建议）
     amap_qps: float = Field(default=3.0, ge=0.1, le=50)  # 个人 key 限流口径
+    # 地理编码城市限定：样例数据与 §11 场景全部是成都主城。不限定城市时
+    # 高德会按全国匹配同名路（实测：「春熙路」无 city 参数命中外省同名路，
+    # 导致 15 分钟等时圈落在凉山、库内候选 0 个）。留空 = 不加城市过滤。
+    default_city: str = "成都"
 
     # ---- 场景打分权重（site_selection，可解释可复现） ----
     score_weight_semantic: float = 0.35

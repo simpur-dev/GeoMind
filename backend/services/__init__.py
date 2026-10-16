@@ -18,6 +18,7 @@ class ServiceBundle(BaseModel):
     query_builder: Any            # QueryBuilder
     embedding: Any                # EmbeddingProvider
     amap: Any = None              # AmapGateway（无 key 时降级为库内兜底）
+    router: Any = None            # SpatialRouter（L4 计算路由，架构 §2.2：OB 下推 or 高德）
     state_repo: Any = None        # StateRepository（L2 图节点持久化用）
     events: Any = None            # EventBus（SSE 事件总线，backend/api/sse_bus.py）
 

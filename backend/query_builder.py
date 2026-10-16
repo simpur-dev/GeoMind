@@ -112,6 +112,17 @@ class PoiDetailSpec(BaseModel):
     poi_id: int = Field(ge=1)
 
 
+class PoiNameSpec(BaseModel):
+    """名称点查入参（地理编码库内兜底用，架构 §7「离线已入库 POI 走 OB」）。
+
+    name 走 LIKE 参数化匹配：通配符与转义符在编译期转义，用户输入永不拼进 SQL 文本。
+    """
+
+    name: str = Field(min_length=1, max_length=40)
+    city: str | None = Field(default=None, max_length=30)
+    limit: int = Field(default=5, ge=1, le=50)
+
+
 class HybridQuerySpec(BaseModel):
     spatial: SpatialConstraint = Field(default_factory=SpatialConstraint)
     scalar: ScalarConstraint = Field(default_factory=ScalarConstraint)
@@ -559,6 +570,29 @@ class QueryBuilder:
             sql=sql, params=params, target="dim_poi",
             columns=_extract_columns(sql, "dim_poi"), tables=("dim_poi",),
             expected_operators=("TABLE GET", "TABLE RANGE SCAN"),
+        )
+
+    # ------------------------------------------------------------------
+    # 名称点查（geocode 库内兜底）：§5.6 只扩展——新增模板，既有编译/校验管线一行未改
+    # ------------------------------------------------------------------
+    def compile_poi_by_name(self, spec: PoiNameSpec) -> CompiledQuery:
+        """dim_poi 按名称模糊点查（含 lon/lat，这是 compile_hybrid 的 SELECT 项没有的）。
+
+        name 无索引 → 期望算子如实写「RANGE SCAN 或 FULL SCAN」，不假装索引命中；
+        2 万行实测全表扫在毫秒级（docs/压测报告-10万级.md 同口径）。
+        """
+        like = re.sub(r"([%_\\])", r"\\\1", spec.name.strip())
+        params: dict[str, Any] = {"status": 1, "name_like": f"%{like}%", "limit": spec.limit}
+        where = ["status = %(status)s", "name LIKE %(name_like)s"]
+        if spec.city:
+            params["city"] = spec.city
+            where.append("city = %(city)s")
+        sql = ("SELECT poi_id, name, address, city, lon, lat, rating\nFROM dim_poi\nWHERE "
+               + "\n  AND ".join(where) + "\nORDER BY rating DESC, poi_id ASC LIMIT %(limit)s")
+        return CompiledQuery(
+            sql=sql, params=params, target="dim_poi",
+            columns=_extract_columns(sql, "dim_poi"), tables=("dim_poi",),
+            expected_operators=("TABLE RANGE SCAN", "TABLE FULL SCAN"),
         )
 
     # ------------------------------------------------------------------

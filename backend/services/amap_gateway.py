@@ -173,7 +173,8 @@ class AmapGateway:
 
     def distance_matrix(self, origins: list[tuple[float, float]],
                         destination: tuple[float, float], mode: int = 1) -> list[dict[str, Any]]:
-        """距离测量（type: 1驾车 0步行 3骑行）→ 每个 origin 的距离/耗时。批量筛选用。"""
+        """距离测量（type: 0 直线 / 1 驾车 / 3 步行，2026-10-16 真实 key 实测；无骑行档）
+        → 每个 origin 的距离/耗时。批量筛选用。type=0 的 duration 恒为 0。"""
         if not 1 <= len(origins) <= 100:
             raise ValueError("origins 数量须在 1-100（高德单次上限）")
         d = self._request("/v3/distance", {

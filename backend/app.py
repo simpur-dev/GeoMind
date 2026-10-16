@@ -11,6 +11,7 @@ from backend.embeddings import get_provider
 from backend.query_builder import QueryBuilder
 from backend.services import ServiceBundle
 from backend.services.amap_gateway import AmapGateway
+from backend.services.spatial_router import SpatialRouter
 from backend.skills.base import SkillContext
 from backend.skills.registry import SkillRegistry
 from backend.state.repository import StateRepository
@@ -19,11 +20,14 @@ from backend.state.repository import StateRepository
 def build_services(settings: Settings | None = None) -> ServiceBundle:
     s = settings or get_settings()
     ob = OBConnection(s)
+    qb = QueryBuilder(ob, s)
+    amap = AmapGateway(s)
     return ServiceBundle(
         ob=ob,
-        query_builder=QueryBuilder(ob, s),
+        query_builder=qb,
         embedding=get_provider(s),
-        amap=AmapGateway(s),
+        amap=amap,
+        router=SpatialRouter(amap, s, qb),
         state_repo=StateRepository(ob),
         events=get_bus(),
     )

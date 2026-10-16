@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Generic, TypeVar
 
@@ -13,6 +14,18 @@ from pydantic import BaseModel, Field
 
 InT = TypeVar("InT", bound=BaseModel)
 OutT = TypeVar("OutT", bound=BaseModel)
+
+
+def elapsed_ms_since(t0: float) -> float:
+    """Skill 输出的墙钟耗时（毫秒），起点取 `time.perf_counter()`。
+
+    用 perf_counter 而非 monotonic：本机 Windows 的 time.monotonic 实测走
+    GetTickCount64，分辨率 15.6 ms（`time.get_clock_info`），亚一个 tick 的调用
+    会一律报 0.00——那会让"耗时"这一列在证据里失去意义。perf_counter 走
+    QueryPerformanceCounter，分辨率 1e-7 s。SQL 类 Skill 不受影响（服务端
+    SYSDATE(6) 计时，见 backend/db/connection.py）。
+    """
+    return round((time.perf_counter() - t0) * 1000, 2)
 
 
 class ToolContext(BaseModel):
