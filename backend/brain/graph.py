@@ -5,8 +5,10 @@
 
     intent → constraints → candidates → spatial_join → decide → render → feedback
 
-checkpointer：MemorySaver（阶段 0）。业务态（Spatial State）在 OB
-scene_solution 表，由图节点通过 StateRepository 读写。
+checkpointer：按 GEOMIND_CHECKPOINT_BACKEND 选后端（架构 §2.2 L5）——
+`memory` 进程内（开发/测试默认），`ob` 同库 SeekDB 持久化（重启进程后会话与
+interrupt 态都在，见 backend/db/checkpoint_ob.py）。业务态（Spatial State）
+在 OB scene_solution 表，由图节点通过 StateRepository 读写。
 
 services 通过 build_graph(ctx) 的闭包注入——不用模块级全局（多会话会串，
 本项目实测踩过）。
@@ -15,13 +17,15 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from backend.api.contracts.map_spec import LayerSource, LayerSpec
 from backend.api.sse_bus import emit
 from backend.brain.intent import IntentResult, RuleIntentParser
+from backend.config import get_settings
+from backend.db.checkpoint_ob import make_checkpointer
+from backend.db.connection import OBConnection
 from backend.llm.gateway import LLMMessage, get_gateway
 from backend.skills.base import SkillContext
 from backend.skills.registry import SkillRegistry
@@ -30,9 +34,21 @@ from backend.state.repository import StateRepository
 
 GRAPH_NODES = ["intent", "constraints", "candidates", "spatial_join", "decide", "render", "feedback"]
 
-# checkpointer 必须跨调用共享：每次 build_graph 若新建 MemorySaver，
-# resume 时拿到的是空 checkpoint（本项目实测踩坑：KeyError 'query'）。
-_CHECKPOINTER = MemorySaver()
+
+def _new_checkpointer() -> Any:
+    """按配置开关选检查点后端（架构 §2.2 L5）：memory 进程内 / ob 同库持久化。
+
+    OBConnection 构造是惰性的（首次执行才取连接），所以 import 期建它不要求库在线。
+    """
+    s = get_settings()
+    return (make_checkpointer("memory") if s.checkpoint_backend == "memory"
+            else make_checkpointer("ob", OBConnection(s)))
+
+
+# checkpointer 必须跨调用共享且**只构造一次**：
+#   · 每次 build_graph 若新建，resume 时拿到的是空 checkpoint（实测踩坑：KeyError 'query'）；
+#   · 节点与路由层一律不感知后端类型（换 ob/memory 只改 GEOMIND_CHECKPOINT_BACKEND）。
+_CHECKPOINTER = _new_checkpointer()
 
 
 class BrainState(TypedDict, total=False):

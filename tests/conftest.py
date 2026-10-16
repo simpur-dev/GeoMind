@@ -17,6 +17,12 @@ os.environ["GEOMIND_LLM_PROVIDER"] = "fake"
 # 需要"在线"行为的用例自己注入 httpx.MockTransport 构造 AmapGateway。
 os.environ["GEOMIND_AMAP_KEY"] = ""
 
+# 检查点默认走进程内后端：持久化检查点属专门用例（tests/test_checkpoint_ob.py 里
+# db_ok 下显式构造 OBCheckpointer），不能让全量测试依赖 002 表是否存在。
+# graph.py 的模块级单例在 import 期就按这个开关定后端，所以必须在这里、
+# 在任何 Settings 实例化之前设好。
+os.environ["GEOMIND_CHECKPOINT_BACKEND"] = "memory"
+
 import pytest
 
 from backend.app import build_services, build_skill_context

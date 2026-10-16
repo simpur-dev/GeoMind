@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -68,6 +69,11 @@ class Settings(BaseSettings):
     # 高德会按全国匹配同名路（实测：「春熙路」无 city 参数命中外省同名路，
     # 导致 15 分钟等时圈落在凉山、库内候选 0 个）。留空 = 不加城市过滤。
     default_city: str = "成都"
+
+    # ---- 检查点持久化（架构 §2.2 L5；ob = 同库 SeekDB，memory = 进程内） ----
+    # 测试默认走 memory（tests/conftest.py 强制），未建 002 表的开发环境也不会炸；
+    # 演示/验收要「重启进程后 resume 仍能续跑」就设 ob。
+    checkpoint_backend: Literal["memory", "ob"] = "memory"
 
     # ---- 场景打分权重（site_selection，可解释可复现） ----
     score_weight_semantic: float = 0.35
