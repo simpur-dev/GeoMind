@@ -4,7 +4,7 @@
  * 每个 kind 一个渲染工厂；新增 kind = 在 registry 里加一行 + 一个渲染器文件，
  * 核心零改动。渲染器只消费 Map Spec 的声明（style/source），不含业务判断。
  */
-import type { FeatureCollection, GeoJsonFeature, LayerSpec, MapSpec } from "@/api/types";
+import type { FeatureCollection, GeoJsonFeature, LayerSpec } from "@/api/types";
 
 /** 渲染器统一接口：apply = 全量应用一个图层；remove = 摘除该图层。 */
 export interface LayerRenderer {
@@ -53,23 +53,4 @@ export function createRenderer(
 
 export function supportedKinds(): LayerSpec["kind"][] {
   return [...registry.keys()];
-}
-
-/** 渲染整份 Map Spec：按 diff 只动变化图层（架构 §4.2）。 */
-export function renderMapSpec(
-  map: MapAdapter,
-  prev: MapSpec | null,
-  next: MapSpec,
-  dataOf: (spec: LayerSpec) => FeatureCollection | null,
-): void {
-  // diff 在调用方（useMapRenderer）完成，这里只负责把单个图层落到地图上
-  for (const spec of next.layers) {
-    const renderer = createRenderer(spec, map);
-    if (!renderer) {
-      console.warn(`[mapspec] 未注册的 kind: ${spec.kind}（图层 ${spec.id} 跳过）`);
-      continue;
-    }
-    const data = dataOf(spec);
-    if (data) renderer.apply(map, spec, data);
-  }
 }

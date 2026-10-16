@@ -4,7 +4,7 @@
 约束 chips 只读展示（constraint_edit 回传端点在后端路线图内，暂不开放编辑）。
 -->
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
 import { NODE_LABELS, useSessionStore } from "@/stores/session";
 
@@ -24,6 +24,16 @@ const chips = (): string[] => {
   for (const k of (c.keywords as string[]) ?? []) out.push(`关键词 ${k}`);
   return out;
 };
+
+/**
+ * HITL 追问文案。类型断言放在 script 里而不是模板里：模板表达式
+ * `{{ (store.question as { question?: string }).question }}` 会让 vue-tsc 的
+ * 模板解析器在可选属性 `?` 处崩（TS1109/TS1128/TS1434，实测 4 条）。
+ */
+const questionText = computed(() => {
+  const q = store.question as { question?: string } | null;
+  return q?.question ?? "";
+});
 
 watch(() => store.messages.length, async () => {
   await nextTick();
@@ -59,7 +69,7 @@ function onKeydown(e: KeyboardEvent): void {
 
       <div v-if="store.question" class="interrupt">
         <div class="interrupt-title">⏸ 需要补充信息</div>
-        <div class="interrupt-q">{{ (store.question as { question?: string }).question }}</div>
+        <div class="interrupt-q">{{ questionText }}</div>
         <div class="interrupt-hint">在下方输入补充内容后回车，将从断点继续执行。</div>
       </div>
     </div>

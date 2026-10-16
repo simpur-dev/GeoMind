@@ -155,3 +155,40 @@ class TestKnowledgeSearch:
             keywords=["咖啡", "选址"], query_text="咖啡馆选址要点", limit=5), skill_ctx)
         assert out.hits
         assert all("咖啡馆选址" in (h.title or "") for h in out.hits)
+
+
+class TestIsoLayerAndCamera:
+    """场景侧：等时圈图层声明只转发不重造；镜头必须真的装得下那个圆。"""
+
+    def _iso_state(self, skill_ctx):
+        from backend.services.spatial_router import PlaceRef
+        from backend.skills.atomic.reachability import ReachabilityInput
+
+        iso = skill_ctx.tools["reachability"].run(ReachabilityInput(
+            center=PlaceRef(lonlat=(104.0817, 30.657)), minutes=15, mode="driving"), skill_ctx)
+        assert iso.ok and iso.degraded                      # conftest 无 key → 正圆降级
+        return iso, {"spec": {"center": [104.0817, 30.657], "radius_m": 1500},
+                     "isochrone": iso.model_dump(mode="json")}
+
+    def test_scene_forwards_layer_and_widens_camera(self, skill_ctx):
+        from backend.api.contracts.map_spec import LayerSpec
+
+        iso, state = self._iso_state(skill_ctx)
+        spec = skill_ctx.tools["site_selection"].render_spec(skill_ctx, "s1", state)
+        assert {ly["kind"] for ly in spec["layers"]} >= {"poi", "heatmap", "isochrone"}
+        # 声明逐字段等于原子 Skill 的产出（场景不重造 href/style）
+        got = next(ly for ly in spec["layers"] if ly["kind"] == "isochrone")
+        assert got == iso.render_spec
+        assert LayerSpec.model_validate(got).source.href.endswith("/layers/l_iso")
+        # 正圆半径 5 km（20 km/h × 15 min）：必须比候选簇经验档位 z15 拉远，且真装得下
+        zoom = spec["map_view"]["zoom"]
+        assert zoom <= 10
+        span_deg = 0.02 / 2 ** (zoom - 13)                  # 与降级画布同一投影模型
+        assert span_deg >= 2 * 5000 / 111_320.0
+
+    def test_without_isochrone_camera_unchanged(self, skill_ctx):
+        """没有等时圈时，POI 镜头的经验档位行为一个字节都不变（防回归）。"""
+        spec = skill_ctx.tools["site_selection"].render_spec(
+            skill_ctx, "s1", {"spec": {"center": [104.0817, 30.657], "radius_m": 1500}})
+        assert spec["map_view"]["zoom"] == 15
+        assert {ly["kind"] for ly in spec["layers"]} == {"poi", "heatmap"}

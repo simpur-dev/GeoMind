@@ -120,3 +120,70 @@ def test_point_select(client, session_with_result):
                     json={"type": "point_select", "payload": {"poi_id": poi_id}})
     assert r.status_code == 200
     assert r.json()["candidate"]["poi_id"] == poi_id
+
+
+# ---------------------------------------------------------------------------
+# 面/线图层（任务卡 2）：l_iso 透传 + l_route 出口转换 + 空集边界
+# ---------------------------------------------------------------------------
+def test_iso_feature_collection_passthrough_and_guards():
+    """内联 GeoJSON 原样透传（已是 GCJ-02）；缺键/形状不合法 → 空集而不是 500。"""
+    from backend.api.routes import iso_feature_collection
+
+    ring = [[104.08, 30.66], [104.09, 30.66], [104.09, 30.67], [104.08, 30.66]]
+    fc = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
+         "properties": {"kind": "isochrone", "degraded": True}}]}
+    assert iso_feature_collection({"geojson": fc}) is fc          # 透传，不重造
+    for bad in (None, {}, {"geojson": None}, {"geojson": {"type": "FeatureCollection"}},
+                {"geojson": {"type": "Feature", "features": []}}, {"geojson": "[^2"}):
+        assert iso_feature_collection(bad) == {"type": "FeatureCollection", "features": []}
+
+
+def test_route_feature_collection_converts_wgs_to_gcj_per_vertex():
+    """路由层出口是 WGS84，端点出口必须是 GCJ-02（逐点对拍 wgs84_to_gcj02，§9.6）。"""
+    from backend.api.geo import wgs84_to_gcj02
+    from backend.api.routes import route_feature_collection
+
+    wgs = [(104.0817, 30.6570), (104.0900, 30.6600), (104.1000, 30.6700)]
+    out = route_feature_collection({"polyline": wgs, "mode": "driving",
+                                    "distance_m": 3112.0, "duration_s": 1101.0})
+    feat = out["features"][0]
+    assert feat["geometry"]["type"] == "LineString"
+    assert len(feat["geometry"]["coordinates"]) == 3
+    for (lng, lat), got in zip(wgs, feat["geometry"]["coordinates"], strict=True):
+        assert got == [round(x, 6) for x in wgs84_to_gcj02(lng, lat)]
+    assert feat["properties"] == {"mode": "driving", "distance_m": 3112.0,
+                                  "duration_s": 1101.0, "point_count": 3}
+    # 两点才成线：单点/空输入不编造几何
+    assert route_feature_collection(None)["features"] == []
+    assert route_feature_collection({"polyline": [wgs[0]]})["features"] == []
+
+
+def test_iso_and_route_endpoints_return_empty_not_404(client, session_with_result):
+    """本轮图状态还没有 route 产出、等时圈在卡 10 前也可能为空——都必须是合法空集。"""
+    sid, _ = session_with_result
+    for layer in ("l_iso", "l_route"):
+        r = client.get(f"/api/sessions/{sid}/layers/{layer}")
+        assert r.status_code == 200, layer
+        fc = r.json()
+        assert fc["type"] == "FeatureCollection" and isinstance(fc["features"], list)
+
+
+def test_l_iso_ring_is_gcj02_when_state_has_output(client, session_with_result):
+    """有等时圈产出时（图已接 reachability），环坐标必须是 GCJ-02 且闭合。"""
+    sid, _ = session_with_result
+    st = client.get(f"/api/sessions/{sid}").json()["graph_state"]
+    iso = st.get("isochrone") or {}
+    if not iso.get("geojson"):
+        pytest.skip("图状态尚未产出等时圈（接图后此用例自动生效）")
+    r = client.get(f"/api/sessions/{sid}/layers/l_iso")
+    ring = r.json()["features"][0]["geometry"]["coordinates"][0]
+    assert len(ring) >= 4 and ring[0] == ring[-1]          # 闭合环
+    center = iso["center"]
+    # 中心点（WGS84）与环上顶点的经度不能逐点相等——否则是把 WGS84 直出了
+    from backend.api.geo import wgs84_to_gcj02
+
+    glng, glat = wgs84_to_gcj02(float(center["lon"]), float(center["lat"]))
+    assert any(abs(x - glng) > 1e-6 or abs(y - glat) > 1e-6 for x, y in ring)
+    props = r.json()["features"][0]["properties"]
+    assert props["kind"] == "isochrone" and "degraded" in props

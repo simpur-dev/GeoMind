@@ -6,6 +6,10 @@
 
 本轮新增：GET /layers/{layer_id}（GeoJSON）、真实 SSE 事件总线（含
 Last-Event-ID 断线续传）、feedback 手势回传（draw_polygon / range_drag）。
+
+任务卡 2 增量：图层数据补齐 l_iso（等时圈，透传 reachability 的 GCJ-02 内联几何）与
+l_route（路线，WGS84 折点出口转 GCJ-02）；`_poi_coords` / `_grid_coords` 两处历史裸 SQL
+已收口进 QueryBuilder（铁律 1：所有 SQL 经编译 + 三层卡点，见 compile_point_query）。
 """
 from __future__ import annotations
 
@@ -19,9 +23,15 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.api.geo import gcj02_to_wgs84, grid_feature_collection, poi_feature_collection
+from backend.api.geo import (
+    gcj02_to_wgs84,
+    grid_feature_collection,
+    line_feature_collection,
+    poi_feature_collection,
+)
 from backend.app import build_services, build_skill_context
 from backend.brain.graph import resume_query, run_query
+from backend.query_builder import PointQuerySpec
 from backend.skills.registry import SkillRegistry
 from backend.state.repository import StateNotFoundError, StateRepository
 
@@ -90,25 +100,27 @@ def create_app() -> FastAPI:
         return dict(snap.values or {})
 
     def _poi_coords(poi_ids: list[int]) -> dict[int, tuple[float, float]]:
-        """点查 POI 坐标（WGS84）。四模 SQL 已验证不含坐标列，这里按需补查。"""
+        """点查 POI 坐标（WGS84）。四模 SQL 不含坐标列，这里按主键补查。
+
+        铁律 1 收口：SQL 由 QueryBuilder 编译并过三层卡点（此前这里是 `IN (%s,...)` 裸拼）。
+        """
         if not poi_ids:
             return {}
-        ph = ", ".join(["%s"] * len(poi_ids))
-        rows = services.ob.execute(
-            f"SELECT poi_id, lon, lat FROM dim_poi WHERE poi_id IN ({ph})", tuple(poi_ids))
+        cq = services.query_builder.compile_point_query(
+            PointQuerySpec(table="dim_poi", ids=poi_ids))
+        rows, _plan = services.query_builder.execute_checked(cq)
         return {int(r["poi_id"]): (float(r["lon"]), float(r["lat"]))
-                for r in rows if r.get("lon")}
+                for r in rows if r.get("lon") is not None}
 
     def _grid_coords(grid_ids: list[int]) -> dict[int, tuple[float, float]]:
         """点查网格中心点（WGS84，取 workday_evening 时段，与查询默认一致）。"""
         if not grid_ids:
             return {}
-        ph = ", ".join(["%s"] * len(grid_ids))
-        rows = services.ob.execute(
-            f"SELECT grid_id, center_lon, center_lat FROM fact_traffic_grid "
-            f"WHERE grid_id IN ({ph}) AND time_bucket = 'workday_evening'", tuple(grid_ids))
+        cq = services.query_builder.compile_point_query(PointQuerySpec(
+            table="fact_traffic_grid", ids=grid_ids, time_bucket="workday_evening"))
+        rows, _plan = services.query_builder.execute_checked(cq)
         return {int(r["grid_id"]): (float(r["center_lon"]), float(r["center_lat"]))
-                for r in rows if r.get("center_lon")}
+                for r in rows if r.get("center_lon") is not None}
 
     # ------------------------------------------------------------------
     # 探针与能力清单
@@ -238,6 +250,10 @@ def create_app() -> FastAPI:
                 if xy is not None:
                     grids.append({**a, "center_lon": xy[0], "center_lat": xy[1]})
             return grid_feature_collection(grids)
+        if layer_id == "l_iso":
+            return iso_feature_collection(st.get("isochrone"))
+        if layer_id == "l_route":
+            return route_feature_collection(st.get("route"))
         raise HTTPException(404, f"未知图层: {layer_id}")
 
     # ------------------------------------------------------------------
@@ -287,6 +303,30 @@ def create_app() -> FastAPI:
 # ---------------------------------------------------------------------------
 # 模块级纯助手
 # ---------------------------------------------------------------------------
+def iso_feature_collection(iso: dict[str, Any] | None) -> dict[str, Any]:
+    """等时圈图层数据：透传 reachability 的内联 GeoJSON（已是 GCJ-02 闭合环）。
+
+    架构 §9.6：坐标系转换在后端，reachability 出口时已完成，端点不再二次转换。
+    图状态没有产出、或形状不合法 → 空 FeatureCollection（**不 500、不 404**；
+    404 只保留给未知 layer id，见 get_layer）。
+    """
+    fc = (iso or {}).get("geojson")
+    if (not isinstance(fc, dict) or fc.get("type") != "FeatureCollection"
+            or not isinstance(fc.get("features"), list)):
+        return {"type": "FeatureCollection", "features": []}
+    return fc
+
+
+def route_feature_collection(route: dict[str, Any] | None) -> dict[str, Any]:
+    """路线图层数据：polyline 是 WGS84（SpatialRouter 出口口径），端点前转 GCJ-02（§9.6）。"""
+    if not route:
+        return {"type": "FeatureCollection", "features": []}
+    pts = [(float(p[0]), float(p[1])) for p in (route.get("polyline") or []) if len(p) == 2]
+    props = {k: route.get(k) for k in ("mode", "distance_m", "duration_s")}
+    props["point_count"] = len(pts)
+    return line_feature_collection(pts, props)
+
+
 def _wkt_to_wgs84(wkt: str) -> str:
     """POLYGON WKT（GCJ-02）→ WGS84 WKT。非法输入原样返回（后端校验层会拦）。"""
     import re
@@ -318,4 +358,5 @@ def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-__all__ = ["ChatIn", "ChatOut", "FeedbackIn", "create_app"]
+__all__ = ["ChatIn", "ChatOut", "FeedbackIn", "create_app", "iso_feature_collection",
+           "route_feature_collection"]

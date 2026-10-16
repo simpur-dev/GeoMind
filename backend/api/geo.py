@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 # 克拉托夫斯基椭球长半轴与第一偏心率平方（公开常量）
@@ -118,3 +119,45 @@ def viewport_from_center(center: tuple[float, float], radius_m: float) -> dict[s
     # 经验映射：1.5 km → z14，3 km → z13，6 km → z12（高德 zoom 语义）
     zoom = 16 if radius_m <= 800 else 15 if radius_m <= 1600 else 14 if radius_m <= 3200 else 13
     return {"center": [round(glng, 6), round(glat, 6)], "zoom": zoom, "pitch": 0.0}
+
+
+# 降级画布的投影口径（web/src/layers/fallback.ts 的 spanDeg）：可见宽度
+# span(z) = 0.02° / 2^(z-13)。高德侧 z0 全宽 360°，同一量级且随 z 单调收缩，
+# 所以按这个模型算出的 z 在两档里都是「够宽」的方向（对高德还偏保守）。
+_SPAN_AT_13_DEG = 0.02
+
+
+def viewport_covering(center: tuple[float, float], radius_m: float,
+                      margin: float = 1.2) -> dict[str, Any]:
+    """镜头必须**装下**以 center 为圆心、radius_m 为半径的圆（等时圈这类几何用）。
+
+    与 `viewport_from_center` 的分工要说清：那个是给候选簇用的经验档位（半径 1.5 km
+    也只用 z15，视野约 1.1 km——簇点靠中心，看不全外圈也不影响判读），本函数则是几何
+    装箱：`span(z) >= 2 * radius * margin`。两者并存，POI 镜头的既有钉死行为不变。
+    """
+    if radius_m <= 0:
+        raise ValueError(f"radius_m 必须为正，收到 {radius_m}")
+    need_deg = 2.0 * (radius_m / 111_320.0) * margin
+    zoom = 13 + math.floor(math.log2(_SPAN_AT_13_DEG / need_deg))
+    zoom = max(3, min(20, zoom))
+    glng, glat = wgs84_to_gcj02(center[0], center[1])
+    return {"center": [round(glng, 6), round(glat, 6)], "zoom": zoom, "pitch": 0.0}
+
+
+def line_feature_collection(points_wgs84: Sequence[tuple[float, float]],
+                            props: dict[str, Any]) -> dict[str, Any]:
+    """线层（kind=route，架构 §9.3）：WGS84 折点 → 出口 GCJ-02 的 LineString Feature。
+
+    少于 2 个点返回空集合——两点才成线，不编造几何（与 poi/grid 渲染器同口径）。
+    """
+    coords: list[list[float]] = []
+    for pt in points_wgs84:
+        glng, glat = wgs84_to_gcj02(float(pt[0]), float(pt[1]))
+        coords.append([round(glng, 6), round(glat, 6)])
+    if len(coords) < 2:
+        return {"type": "FeatureCollection", "features": []}
+    return {"type": "FeatureCollection", "features": [{
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": coords},
+        "properties": props,
+    }]}

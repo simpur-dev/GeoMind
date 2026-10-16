@@ -45,6 +45,7 @@ class BrainState(TypedDict, total=False):
     spec: dict[str, Any] | None
     candidates: list[dict[str, Any]]
     aggs: list[dict[str, Any]]
+    isochrone: dict[str, Any]      # reachability 产出（含内联 GCJ-02 geojson 与 render_spec）
     decision: dict[str, Any]
     map_spec: dict[str, Any]
     feedback: dict[str, Any] | None
@@ -82,6 +83,13 @@ def _constraints_node(state: BrainState, ctx: SkillContext) -> BrainState:
         "query_text": slots.get("query_text"),
         "time_bucket": "workday_evening",
         "limit": 10,
+        # 「时间约束」两类字段口径严格分开（架构 §2.2 L2 约束建模器）：
+        #   time_bucket = 客流时段（workday_evening 等，下推 fact_traffic_grid）
+        #   iso_minutes / travel_mode = 等时圈时间预算与出行方式（下发 reachability）
+        # 本卡由场景默认值兜底（Skill Schema：driving / 15 min）；意图器填这两个槽位属卡 5，
+        # LLM 意图器（卡 4）用同名槽位，chips 点改（卡 6）提供第三个来源。
+        "iso_minutes": slots.get("iso_minutes"),
+        "travel_mode": slots.get("travel_mode"),
     }
     emit(ctx, "constraints.updated", spec)
     return {"spec": spec}
@@ -134,6 +142,36 @@ def build_graph(ctx: SkillContext) -> Any:
         # 生成器里 json.dumps 不认 Decimal，会把整条事件流打断（实测踩坑）。
         return {"candidates": [c.model_dump(mode="json") for c in out.candidates]}
 
+    def _isochrone_update(state: BrainState, ctx: SkillContext) -> BrainState:
+        """高德等时圈产出落图状态（架构 §2.3 第 4 步「空间计算」、§7「OB 不支持的走高德」）。
+
+        只给既有节点补一次 L4 调用：节点集合与边一律不动（§5.6 冻结的是主图骨架）。
+        几何计算全在 SpatialRouter，本节点不知道「方位角/半径」为何物（铁律 2）。
+        """
+        spec = state.get("spec") or {}
+        center = spec.get("center")
+        if not center:
+            return {}
+
+        from backend.services.spatial_router import PlaceRef
+        from backend.skills.atomic.reachability import ReachabilityInput
+
+        # 时间预算/出行方式来自约束（卡 5 起由意图器填这两个槽位）；缺省时沿用
+        # Skill Schema 的 driving / 15 min——不在图里另写一份默认值，免得两处漂移。
+        kwargs: dict[str, Any] = {}
+        if spec.get("iso_minutes"):
+            kwargs["minutes"] = int(spec["iso_minutes"])
+        if spec.get("travel_mode"):
+            kwargs["mode"] = spec["travel_mode"]
+
+        emit(ctx, "tool.start", {"skill": "reachability"})
+        iso = ctx.tools["reachability"].run(
+            ReachabilityInput(center=PlaceRef(lonlat=tuple(center)), **kwargs), ctx)
+        emit(ctx, "tool.end", {"skill": "reachability", "elapsed_ms": iso.elapsed_ms,
+                                "degraded": iso.degraded})
+        # 失败也落一个空产出（而不是抛）：图不中断，l_iso 端点据此返回空集
+        return {"isochrone": iso.model_dump(mode="json") if iso.ok else {}}
+
     def spatial_join(state: BrainState, ctx: SkillContext) -> BrainState:
         from backend.skills.atomic.spatial_join_agg import SpatialJoinAggInput
 
@@ -145,7 +183,8 @@ def build_graph(ctx: SkillContext) -> Any:
             category_id=spec.get("category_id"), limit=100,
         ), ctx)
         emit(ctx, "tool.end", {"skill": "spatial_join_agg", "elapsed_ms": out.elapsed_ms})
-        return {"aggs": [a.model_dump(mode="json") for a in out.aggs]}
+        return {"aggs": [a.model_dump(mode="json") for a in out.aggs],
+                **_isochrone_update(state, ctx)}
 
     def render(state: BrainState, ctx: SkillContext) -> BrainState:
         scene = ctx.tools.get("site_selection")

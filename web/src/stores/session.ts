@@ -37,6 +37,7 @@ export interface ChatMessage {
 const SKILL_TO_NODE: Record<string, GraphNode> = {
   multi_modal_search: "candidates",
   spatial_join_agg: "spatial_join",
+  reachability: "spatial_join",     // 等时圈与网格聚合同属第 4 步「空间计算」
 };
 
 function freshProgress(): Record<GraphNode, NodeState> {
@@ -50,6 +51,8 @@ interface SessionState {
   /** 一轮对话执行中（chat 请求未返回）。 */
   busy: boolean;
   messages: ChatMessage[];
+  /** 最近一次用户输入的原文（draw_polygon 重跑时随手势一起回传给后端）。 */
+  lastQuery: string;
   progress: Record<GraphNode, NodeState>;
   /** 最近一次 constraints.updated（左栏 chips 展示）。 */
   constraints: Record<string, unknown> | null;
@@ -84,6 +87,7 @@ export const useSessionStore = defineStore("session", {
     connected: false,
     busy: false,
     messages: [],
+    lastQuery: "",
     progress: freshProgress(),
     constraints: null,
     mapSpec: null,

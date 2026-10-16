@@ -9,6 +9,7 @@
  * 投影：以 map_view.center 为中心的等距圆柱近似（局部范围误差可忽略），
  * 视野跨度按 zoom 估算（高德 zoom 语义近似：span ≈ 0.02° / 2^(zoom-13)）。
  */
+import { isPoint } from "@/api/types";
 import type { FeatureCollection, GeoJsonFeature, LayerSpec, MapView } from "@/api/types";
 import type { LayerRenderer, MapAdapter } from "./registry";
 import { registerRenderer } from "./registry";
@@ -17,6 +18,21 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 function spanDeg(zoom: number): number {
   return 0.02 / 2 ** (Math.max(3, Math.min(18, zoom)) - 13);
+}
+
+/** 把一段经纬度环/折线投影成 SVG path 的 d 属性。 */
+function ringPath(map: FallbackMapAdapter, ring: [number, number][]): string {
+  return ring
+    .map(([lng, lat], i) => {
+      const [x, y] = map.project(lng, lat);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+/** SVG 属性里只允许后端声明的数值与颜色，缺省值仅用于「不至于看不见」。 */
+function num(v: unknown, dflt: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : dflt;
 }
 
 /** 投影器：GCJ-02 → SVG 像素坐标（以中心为零点）。 */
@@ -177,6 +193,7 @@ class FallbackPoiRenderer implements LayerRenderer {
     const radius = Number(spec.style.radius ?? 6);
     const color = String(spec.style.color ?? "#1677FF");
     for (const f of data.features) {
+      if (!isPoint(f.geometry)) continue;          // 只渲点几何，其他几何不猜坐标
       const [x, y] = this.map.project(...f.geometry.coordinates);
       const c = document.createElementNS(SVG_NS, "circle");
       c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y));
@@ -221,6 +238,7 @@ class FallbackHeatmapRenderer implements LayerRenderer {
     const max = Math.max(1, ...values);
     const size = Number(spec.style.radius ?? 24) * 1.5;
     for (const f of data.features) {
+      if (!isPoint(f.geometry)) continue;          // 网格中心点是点几何
       const v = Number(f.properties[key] ?? 0);
       const [x, y] = this.map.project(...f.geometry.coordinates);
       const r = document.createElementNS(SVG_NS, "rect");
@@ -237,8 +255,97 @@ class FallbackHeatmapRenderer implements LayerRenderer {
   }
 }
 
+/**
+ * 面渲染器：polygon 与 isochrone 共用同一实现，差别只在后端 style 是否声明 dash。
+ * 样式全部消费 spec.style（架构 §9.3），前端不含业务常量。
+ */
+class FallbackPolygonRenderer implements LayerRenderer {
+  readonly kind: LayerSpec["kind"];
+  private readonly root: SVGGElement;
+
+  constructor(private readonly map: FallbackMapAdapter, kind: "polygon" | "isochrone") {
+    this.kind = kind;
+    this.root = document.createElementNS(SVG_NS, "g") as SVGGElement;
+    // 必须真的 append 进 DOM（此前画在游离 <g> 上导致白屏，见设计文档踩坑记录）
+    this.map.layersRoot.appendChild(this.root);
+  }
+
+  apply(_map: MapAdapter, spec: LayerSpec, data: FeatureCollection): void {
+    this.root.querySelectorAll("*").forEach((n) => n.remove());
+    for (const f of data.features) {
+      if (f.geometry.type !== "Polygon") continue;
+      const p = document.createElementNS(SVG_NS, "path") as SVGPathElement;
+      p.setAttribute("d", `${ringPath(this.map, f.geometry.coordinates[0])} Z`);
+      p.setAttribute("fill", String(spec.style.fill ?? "rgba(80,140,255,0.2)"));
+      p.setAttribute("fill-opacity", String(num(spec.style.opacity, 1)));
+      p.setAttribute("stroke", String(spec.style.stroke ?? "#5a9"));
+      p.setAttribute("stroke-width", String(num(spec.style.width, 2)));
+      if (spec.style.dash) p.setAttribute("stroke-dasharray", "6 4");
+      this.root.appendChild(p);
+    }
+  }
+
+  remove(): void {
+    this.root.querySelectorAll("*").forEach((n) => n.remove());
+  }
+}
+
+/** 线渲染器（kind=route）：折线描边 + 起终点标记（§9.3 route 图层）。 */
+class FallbackRouteRenderer implements LayerRenderer {
+  readonly kind = "route" as const;
+  private readonly root: SVGGElement;
+
+  constructor(private readonly map: FallbackMapAdapter) {
+    this.root = document.createElementNS(SVG_NS, "g") as SVGGElement;
+    this.map.layersRoot.appendChild(this.root);
+  }
+
+  apply(_map: MapAdapter, spec: LayerSpec, data: FeatureCollection): void {
+    this.root.querySelectorAll("*").forEach((n) => n.remove());
+    const color = String(spec.style.color ?? "#3366cc");
+    const width = num(spec.style.width, 4);
+    const dot = num(spec.style.endpointRadius, 5);
+
+    for (const f of data.features) {
+      if (f.geometry.type !== "LineString") continue;
+      const pts = f.geometry.coordinates;
+      const line = document.createElementNS(SVG_NS, "polyline") as SVGPolylineElement;
+      line.setAttribute("points", pts.map(([lng, lat]) => {
+        const [x, y] = this.map.project(lng, lat);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" "));
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", color);
+      line.setAttribute("stroke-width", String(width));
+      line.setAttribute("stroke-linejoin", "round");
+      this.root.appendChild(line);
+
+      // 起终点：首点实心、末点空心，半径来自后端 style 声明
+      const endpoint = (pt: [number, number], hollow: boolean): void => {
+        const [x, y] = this.map.project(pt[0], pt[1]);
+        const c = document.createElementNS(SVG_NS, "circle") as SVGCircleElement;
+        c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y));
+        c.setAttribute("r", String(dot));
+        c.setAttribute("fill", hollow ? "#fff" : color);
+        c.setAttribute("stroke", color);
+        c.setAttribute("stroke-width", "2");
+        this.root.appendChild(c);
+      };
+      endpoint(pts[0], false);
+      endpoint(pts[pts.length - 1], true);
+    }
+  }
+
+  remove(): void {
+    this.root.querySelectorAll("*").forEach((n) => n.remove());
+  }
+}
+
 /** 注册降级渲染器（amap 注册表未启用时由 MapCanvas 调用）。 */
 export function registerFallbackRenderers(map: FallbackMapAdapter): void {
   registerRenderer("poi", () => new FallbackPoiRenderer(map));
   registerRenderer("heatmap", () => new FallbackHeatmapRenderer(map));
+  registerRenderer("polygon", () => new FallbackPolygonRenderer(map, "polygon"));
+  registerRenderer("isochrone", () => new FallbackPolygonRenderer(map, "isochrone"));
+  registerRenderer("route", () => new FallbackRouteRenderer(map));
 }

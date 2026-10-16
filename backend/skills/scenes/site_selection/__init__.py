@@ -156,7 +156,7 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
             MapView,
             PanelSpec,
         )
-        from backend.api.geo import viewport_from_center
+        from backend.api.geo import viewport_covering, viewport_from_center
 
         st = state or {}
         spec = st.get("spec") or {}
@@ -182,6 +182,16 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
             PanelSpec(id="p_ranking", kind="ranking", data_ref="candidates", title="候选排名"),
             PanelSpec(id="p_metrics", kind="metrics", data_ref="decision.metrics", title="关键指标"),
         ]
-        map_spec = MapSpec(version="1.0", map_view=MapView(**viewport_from_center(center, radius_m)),
+        # 等时圈图层：声明的单一来源是 reachability 原子 Skill 的 render_spec 产出，
+        # 场景里只负责「有产出就挂上去」，不重造 href/style（§9.3 kind 注册表）。
+        iso = (state or {}).get("isochrone") or {}
+        iso_layer = iso.get("render_spec")
+        if iso_layer:
+            layers.append(LayerSpec.model_validate(iso_layer))
+        # 镜头口径分两种：等时圈是公里级几何，按「装得下」算；只有候选簇时用经验档位。
+        radii = [v.get("radius_m") for v in (iso.get("vertices") or []) if v.get("radius_m")]
+        view = (viewport_covering(center, max(radii)) if radii
+                else viewport_from_center(center, radius_m))
+        map_spec = MapSpec(version="1.0", map_view=MapView(**view),
                            layers=layers, panels=panels)
         return map_spec.model_dump(mode="json")

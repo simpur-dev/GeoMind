@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
+from backend.config import Settings
 from backend.query_builder import (
     CompileError,
     GridAggSpec,
     HybridQuerySpec,
     PlanAssertionError,
+    PointQuerySpec,
     QueryBuilder,
     ScalarConstraint,
     SemanticConstraint,
@@ -162,3 +165,72 @@ class TestPlanAssertion:
         qb = QueryBuilder(services.ob)
         cq, plan = qb.build_and_check(_spec(), QVEC)
         assert any(op in plan for op in cq.expected_operators)
+
+
+class TestPointQuery:
+    """主键批量点查（任务卡 2：routes.py 裸 SQL 收口的唯一出口）。"""
+
+    def test_dim_poi_shape_is_placeholders_only(self, services):
+        qb = QueryBuilder(services.ob)
+        cq = qb.compile_point_query(PointQuerySpec(table="dim_poi", ids=[6469, 5384]))
+        assert cq.target == "dim_poi"
+        assert "poi_id IN (%(id0)s, %(id1)s)" in cq.sql
+        assert "SELECT poi_id, lon, lat" in cq.sql
+        assert cq.params["limit"] == 2 and cq.params["id0"] == 5384   # 去重升序
+        assert cq.expected_operators == ("TABLE GET", "TABLE RANGE SCAN")
+        assert "6469" not in cq.sql                                   # 值只进参数，不进文本
+
+    def test_grid_keeps_native_columns_without_alias(self, services):
+        """网格表的坐标列是 center_lon/center_lat——不得别名成 lon/lat（会被跨表串列校验拦下）。"""
+        qb = QueryBuilder(services.ob)
+        cq = qb.compile_point_query(PointQuerySpec(
+            table="fact_traffic_grid", ids=[1, 2], time_bucket="workday_evening"))
+        assert "center_lon" in cq.sql and "center_lat" in cq.sql
+        assert "AS lon" not in cq.sql and "AS lat" not in cq.sql
+        assert "time_bucket = %(time_bucket)s" in cq.sql
+        assert set(cq.columns) == {"grid_id", "center_lon", "center_lat", "time_bucket"}
+
+    def test_time_bucket_rejected_on_poi_table(self, services):
+        qb = QueryBuilder(services.ob)
+        with pytest.raises(CompileError, match="time_bucket 只适用于"):
+            qb.compile_point_query(PointQuerySpec(table="dim_poi", ids=[1], time_bucket="x"))
+
+    def test_empty_ids_rejected_at_schema(self, services):
+        """ids 非空由 Schema 的 min_length 保证（空列表进不了编译期）。"""
+        with pytest.raises(ValidationError):
+            PointQuerySpec(table="dim_poi", ids=[])
+
+    def test_ids_over_max_limit_rejected(self, services):
+        qb = QueryBuilder(services.ob, Settings(max_limit=1))
+        with pytest.raises(CompileError, match="ids 过多"):
+            qb.compile_point_query(PointQuerySpec(table="dim_poi", ids=[1, 2]))
+
+    def test_injection_attempts_stopped_at_schema(self, services):
+        """表名走 Literal、ids 走 int：任何标识符/值注入都进不了 SQL 文本。"""
+        with pytest.raises(ValidationError):
+            PointQuerySpec(table="dim_poi; DROP TABLE dim_poi", ids=[1])
+        with pytest.raises(ValidationError):
+            PointQuerySpec(table="dim_poi", ids=["1) OR 1=1 --"])   # type: ignore[list-item]
+
+    def test_execute_checked_passes_three_gates_on_production(self, services, db_ok):
+        qb = QueryBuilder(services.ob)
+        cq = qb.compile_point_query(PointQuerySpec(table="dim_poi", ids=[1, 2, 3]))
+        rows, plan = qb.execute_checked(cq)
+        assert len(rows) == 3
+        assert all(r["lon"] is not None and r["lat"] is not None for r in rows)
+        assert any(op in plan for op in cq.expected_operators), plan
+
+    def test_execute_checked_grid_matches_handwritten(self, services, db_ok):
+        """与手写 SQL 对拍同一批网格中心点（证明收口没有改变行为）。"""
+        qb = QueryBuilder(services.ob)
+        cq = qb.compile_point_query(PointQuerySpec(
+            table="fact_traffic_grid", ids=[1, 51, 101], time_bucket="workday_evening"))
+        rows, _plan = qb.execute_checked(cq)
+        manual = services.ob.execute(
+            "SELECT grid_id, center_lon, center_lat FROM fact_traffic_grid "
+            "WHERE grid_id IN (1, 51, 101) AND time_bucket = 'workday_evening'")
+        got = {int(r["grid_id"]): (round(float(r["center_lon"]), 6), round(float(r["center_lat"]), 6))
+               for r in rows}
+        want = {int(r["grid_id"]): (round(float(r["center_lon"]), 6), round(float(r["center_lat"]), 6))
+                for r in manual}
+        assert got == want

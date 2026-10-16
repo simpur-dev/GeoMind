@@ -8,6 +8,7 @@
  * key 合规：占位符/过短 key 一律视为未配置（不内置有效 key），
  * 安全密钥 securityJsCode 若有则经 window._AMapSecurityConfig 下发。
  */
+import { isPoint } from "@/api/types";
 import type { FeatureCollection, GeoJsonFeature, LayerSpec } from "@/api/types";
 import type { LayerRenderer, MapAdapter } from "./registry";
 import { registerRenderer } from "./registry";
@@ -120,6 +121,7 @@ class AmapPoiRenderer implements LayerRenderer {
     const radius = Number(spec.style.radius ?? 6);
     const labelBy = Boolean(spec.style.labelBy);
     for (const f of data.features) {
+      if (!isPoint(f.geometry)) continue;          // 只渲点几何，其他几何不猜坐标
       const [lng, lat] = f.geometry.coordinates;
       const name = String(f.properties.name ?? "");
       const html = document.createElement("div");
@@ -155,11 +157,15 @@ class AmapHeatmapRenderer implements LayerRenderer {
     this.remove();
     const key = String(spec.style.valueKey ?? "flow");
     const radius = Number(spec.style.radius ?? 24);
-    const points = data.features.map((f) => ({
-      lng: f.geometry.coordinates[0],
-      lat: f.geometry.coordinates[1],
-      count: Number(f.properties[key] ?? 0),
-    }));
+    const points: { lng: number; lat: number; count: number }[] = [];
+    for (const f of data.features) {
+      if (!isPoint(f.geometry)) continue;      // 网格中心点是点几何
+      points.push({
+        lng: f.geometry.coordinates[0],
+        lat: f.geometry.coordinates[1],
+        count: Number(f.properties[key] ?? 0),
+      });
+    }
     const max = Math.max(1, ...points.map((p) => p.count));
 
     if (typeof this.adapter.runtime.HeatMap === "function") {
@@ -192,8 +198,100 @@ class AmapHeatmapRenderer implements LayerRenderer {
   }
 }
 
+/**
+ * 面渲染器：polygon 与 isochrone 共用 AMap.Polygon（2.0 核心类，不需要插件）。
+ * 差别只在后端 style 是否声明 dash；颜色/线宽全部来自 spec.style（§9.3）。
+ */
+class AmapPolygonRenderer implements LayerRenderer {
+  readonly kind: LayerSpec["kind"];
+  private polys: AMap.Polygon[] = [];
+
+  constructor(private readonly adapter: AMapAdapter, kind: "polygon" | "isochrone") {
+    this.kind = kind;
+  }
+
+  apply(_map: MapAdapter, spec: LayerSpec, data: FeatureCollection): void {
+    this.remove();
+    const dashed = Boolean(spec.style.dash);
+    for (const f of data.features) {
+      if (f.geometry.type !== "Polygon") continue;
+      const poly = new this.adapter.runtime.Polygon({
+        path: f.geometry.coordinates,
+        fillColor: String(spec.style.fill ?? "rgba(80,140,255,0.2)"),
+        strokeColor: String(spec.style.stroke ?? "#5a9"),
+        strokeWeight: Number(spec.style.width ?? 2),
+        strokeStyle: dashed ? "dashed" : "solid",
+        strokeDasharray: dashed ? [6, 4] : undefined,
+        bubble: true,
+        zIndex: this.kind === "isochrone" ? 40 : 60,
+      });
+      poly.setMap(this.adapter.map);
+      this.polys.push(poly);
+    }
+  }
+
+  remove(): void {
+    for (const p of this.polys) p.setMap(null);
+    this.polys = [];
+  }
+}
+
+/** 线渲染器（kind=route）：AMap.Polyline 描边 + 起/终点标记。 */
+class AmapRouteRenderer implements LayerRenderer {
+  readonly kind = "route" as const;
+  private lines: AMap.Polyline[] = [];
+  private ends: AMap.Marker[] = [];
+
+  constructor(private readonly adapter: AMapAdapter) {}
+
+  apply(_map: MapAdapter, spec: LayerSpec, data: FeatureCollection): void {
+    this.remove();
+    const color = String(spec.style.color ?? "#3366cc");
+    const width = Number(spec.style.width ?? 4);
+    const dot = Number(spec.style.endpointRadius ?? 5);
+
+    for (const f of data.features) {
+      if (f.geometry.type !== "LineString") continue;
+      const line = new this.adapter.runtime.Polyline({
+        path: f.geometry.coordinates,
+        strokeColor: color,
+        strokeWeight: width,
+        strokeOpacity: 0.9,
+        lineJoin: "round",
+        bubble: true,
+      });
+      line.setMap(this.adapter.map);
+      this.lines.push(line);
+
+      // 起点实心、终点空心（HTML marker，与 poi 渲染器同一写法，不引额外 CSS）
+      const ends: [number[], boolean][] = [[f.geometry.coordinates[0], false],
+        [f.geometry.coordinates[f.geometry.coordinates.length - 1], true]];
+      for (const [pt, hollow] of ends) {
+        const html = document.createElement("span");
+        html.style.cssText = `display:inline-block;width:${dot * 2}px;height:${dot * 2}px;`
+          + `border-radius:50%;background:${hollow ? "#fff" : color};border:2px solid ${color}`;
+        const m = new this.adapter.runtime.Marker({
+          position: [pt[0], pt[1]], content: html, anchor: "center", zIndex: 130,
+        });
+        m.setMap(this.adapter.map);
+        this.ends.push(m);
+      }
+    }
+  }
+
+  remove(): void {
+    for (const l of this.lines) l.setMap(null);
+    for (const m of this.ends) m.setMap(null);
+    this.lines = [];
+    this.ends = [];
+  }
+}
+
 /** 注册高德模式渲染器（MapCanvas 在 SDK 加载成功后调用）。 */
 export function registerAmapRenderers(map: AMapAdapter): void {
   registerRenderer("poi", () => new AmapPoiRenderer(map));
   registerRenderer("heatmap", () => new AmapHeatmapRenderer(map));
+  registerRenderer("polygon", () => new AmapPolygonRenderer(map, "polygon"));
+  registerRenderer("isochrone", () => new AmapPolygonRenderer(map, "isochrone"));
+  registerRenderer("route", () => new AmapRouteRenderer(map));
 }

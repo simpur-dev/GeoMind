@@ -15,7 +15,12 @@ from backend.api.contracts.map_spec import (
     MapSpec,
     MapView,
 )
-from backend.api.geo import gcj02_to_wgs84, viewport_from_center, wgs84_to_gcj02
+from backend.api.geo import (
+    gcj02_to_wgs84,
+    viewport_covering,
+    viewport_from_center,
+    wgs84_to_gcj02,
+)
 from backend.api.routes import _wkt_to_wgs84
 from backend.api.sse_bus import EventBus
 
@@ -67,6 +72,25 @@ class TestCoordTransform:
         assert viewport_from_center((104.0817, 30.6570), 3200)["zoom"] == 14
         # viewport 中心必须是 GCJ-02（与库内 WGS84 不同）
         assert v["center"] != [104.0817, 30.6570]
+
+    @pytest.mark.parametrize("radius_m", [1500.0, 3000.0, 5000.0, 12000.0])
+    def test_viewport_covering_actually_fits_the_circle(self, radius_m: float):
+        """等时圈镜头必须**装得下**那个圆——按降级画布的投影模型反算核验。
+
+        实测教训：沿用候选簇的经验档位时，5 km 等时圈在 800×600 画布上被投影成
+        8682×4023 px（超出画布十余倍），图 render 出来了但在画面外。
+        """
+        v = viewport_covering((104.0817, 30.6570), radius_m)
+        zoom = v["zoom"]
+        assert 3 <= zoom <= 20
+        span_deg = 0.02 / 2 ** (zoom - 13)          # web/src/layers/fallback.ts spanDeg
+        need_deg = 2 * radius_m / 111_320.0
+        assert span_deg >= need_deg, f"z{zoom} 可见 {span_deg:.4f}° 装不下 {need_deg:.4f}°"
+        assert zoom < viewport_from_center((104.0817, 30.6570), radius_m)["zoom"]
+
+    def test_viewport_covering_rejects_non_positive_radius(self):
+        with pytest.raises(ValueError, match="radius_m"):
+            viewport_covering((104.08, 30.65), 0)
 
 
 class TestMapSpecContract:

@@ -123,6 +123,19 @@ class PoiNameSpec(BaseModel):
     limit: int = Field(default=5, ge=1, le=50)
 
 
+class PointQuerySpec(BaseModel):
+    """主键批量点查入参（图层数据端点取坐标用，架构 §2.2 L4「唯一 SQL 出口」）。
+
+    ids 上限 200 与 `SemanticConstraint.limit` 同一口径（受 validate() 的
+    max_limit 天花板约束）；列名不作为参数传入——只可能来自 `_POINT_COLUMNS`
+    常量映射，标识符注入面归零。
+    """
+
+    table: Literal["dim_poi", "fact_traffic_grid"]
+    ids: list[int] = Field(min_length=1, max_length=200, description="主键列表（自动去重）")
+    time_bucket: str | None = Field(default=None, max_length=32, description="仅网格表")
+
+
 class HybridQuerySpec(BaseModel):
     spatial: SpatialConstraint = Field(default_factory=SpatialConstraint)
     scalar: ScalarConstraint = Field(default_factory=ScalarConstraint)
@@ -179,6 +192,13 @@ _TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 _READONLY_TABLES = frozenset(_TABLE_COLUMNS)
+
+# 主键点查的列映射（表 → 主键列, 经度列, 纬度列）。列名只能来自这张表，
+# 调用方传不进任何标识符——这是 compile_point_query 唯一的列来源。
+_POINT_COLUMNS: dict[str, tuple[str, str, str]] = {
+    "dim_poi": ("poi_id", "lon", "lat"),
+    "fact_traffic_grid": ("grid_id", "center_lon", "center_lat"),
+}
 
 # 语义检索允许的距离列（向量目标表）
 _VEC_ORDER: dict[str, str] = {
@@ -605,6 +625,50 @@ class QueryBuilder:
         self.dry_run(cq)
         plan = self.assert_plan(cq)
         return cq, plan
+
+    # ------------------------------------------------------------------
+    # 主键批量点查（§9.3 图层端点取坐标）：同样是「只扩展、不改管线」
+    # ------------------------------------------------------------------
+    def compile_point_query(self, spec: PointQuerySpec) -> CompiledQuery:
+        """按主键取坐标列。dim_poi 走 poi_id(PK)，网格走 (grid_id, time_bucket) 复合 PK。
+
+        列名**不做别名**（网格表就是 center_lon/center_lat）：把别名写成 lon/lat 会被
+        `_extract_columns` 判成「lon/lat 不属于 fact_traffic_grid」→ 跨表串列拦截。
+        口径统一交给调用方映射，校验层保持表的真实列面。
+        """
+        if spec.time_bucket and spec.table != "fact_traffic_grid":
+            raise CompileError(f"time_bucket 只适用于 fact_traffic_grid，当前表 {spec.table}")
+        id_col, lon_col, lat_col = _POINT_COLUMNS[spec.table]
+        ids = sorted({int(i) for i in spec.ids})
+        if len(ids) > self.s.max_limit:
+            raise CompileError(f"ids 过多: {len(ids)}（上限 max_limit={self.s.max_limit}）")
+
+        params: dict[str, Any] = {"limit": len(ids)}
+        for i, pk in enumerate(ids):
+            params[f"id{i}"] = pk
+        where = [f"{id_col} IN (" + ", ".join(f"%(id{i})s" for i in range(len(ids))) + ")"]
+        if spec.time_bucket:
+            params["time_bucket"] = spec.time_bucket
+            where.append("time_bucket = %(time_bucket)s")
+
+        sql = (f"SELECT {id_col}, {lon_col}, {lat_col}\nFROM {spec.table}\nWHERE "
+               + "\n  AND ".join(where) + "\nLIMIT %(limit)s")
+        return CompiledQuery(
+            sql=sql, params=params, target=spec.table,
+            columns=_extract_columns(sql, spec.table), tables=(spec.table,),
+            expected_operators=("TABLE GET", "TABLE RANGE SCAN"),
+        )
+
+    # ------------------------------------------------------------------
+    # 三层卡点全过再执行（供 L1 端点等「非 Skill」调用方复用同一套卡点）
+    # ------------------------------------------------------------------
+    def execute_checked(self, cq: CompiledQuery) -> tuple[list[dict[str, Any]], str]:
+        """validate → dry_run → assert_plan → 执行；返回 (行集, EXPLAIN 计划)。"""
+        self.validate(cq)
+        self.dry_run(cq)
+        plan = self.assert_plan(cq)
+        rows, _ms = self.ob.execute_timed(cq.sql, cq.params)
+        return rows, plan
 
 
 def _wkt_bbox(wkt: str) -> tuple[tuple[float, float], tuple[float, float]]:

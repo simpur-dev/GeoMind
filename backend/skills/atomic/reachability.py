@@ -35,8 +35,9 @@ _CIRCLE_EVIDENCE = {"type": "data", "ref": "iso_circle_approx",
 _FAILED_EVIDENCE = {"type": "amap", "ref": "distance_matrix",
                     "note": "高德在线采样失败，不产出等时圈"}
 
-# 图层样式取自架构 §9.3 的 isochrone 示例条目
-_ISO_STYLE = {"fill": "rgba(80,140,255,0.2)", "stroke": "#5a9"}
+# 图层样式取自架构 §9.3 的 isochrone 示例条目；dash/width 也在此声明，
+# 前端渲染器只消费不决定（§9.6 前端零业务判断）。
+_ISO_STYLE = {"fill": "rgba(80,140,255,0.2)", "stroke": "#5a9", "dash": True, "width": 2}
 
 
 class ReachabilityInput(BaseModel):

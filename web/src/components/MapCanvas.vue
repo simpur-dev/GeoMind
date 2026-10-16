@@ -37,6 +37,14 @@ const renderedIds = new Set<string>();
 let lastRendered: MapSpec | null = null;
 let lastView = "";
 
+/** 图层开关的中文标签：后端 Map Spec 的 layer id → 展示名，未知 id 回落原 id（不猜语义）。 */
+const LAYER_LABELS: Record<string, string> = {
+  l_candidates: "POI 候选",
+  l_heat: "客流热力",
+  l_iso: "等时圈",
+  l_route: "路线",
+};
+
 onMounted(async () => {
   const key = import.meta.env.VITE_AMAP_KEY as string | undefined;
   if (isAmapKeyConfigured(key)) {
@@ -180,7 +188,7 @@ watch(() => store.selectedPoiId, (id, prev) => {
           :checked="store.visibleLayers[l.id] ?? true"
           @change="store.toggleLayer(l.id)"
         >
-        {{ l.id === "l_heat" ? "热力" : l.id === "l_candidates" ? "POI" : l.id }}
+        {{ LAYER_LABELS[l.id] ?? l.id }}
       </label>
 
       <button

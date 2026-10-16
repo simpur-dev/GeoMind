@@ -34,7 +34,28 @@ class TestGraph:
         from backend.brain.graph import build_graph
 
         app = build_graph(skill_ctx)
-        assert app.get_graph().nodes.keys() >= set(GRAPH_NODES)
+        nodes = set(app.get_graph().nodes) - {"__start__", "__end__"}
+        assert nodes >= set(GRAPH_NODES)
+        # 骨架冻结核对（§5.6）：接了 reachability 也不许多出第 8 个业务节点
+        assert nodes == set(GRAPH_NODES)
+
+    def test_spatial_join_lands_degraded_isochrone_in_state(self, skill_ctx, db_ok):
+        """任务卡 2：等时圈产出进图状态 + 场景声明 l_iso 图层（conftest 无 key → 正圆降级）。"""
+        r = run_query("帮我在春熙路附近选个咖啡馆位置", skill_ctx, thread_id="pytest-iso")
+        st = r["state"]
+        iso = st.get("isochrone") or {}
+        assert iso and iso["ok"] and iso["degraded"] is True
+        assert iso["sampled_points"] == 0 and len(iso["vertices"]) == 12
+        ring = iso["geojson"]["features"][0]["geometry"]["coordinates"][0]
+        assert len(ring) == 13 and ring[0] == ring[-1]      # GCJ-02 闭合环
+
+        kinds = {layer["kind"] for layer in st["map_spec"]["layers"]}
+        assert "isochrone" in kinds
+        layer = next(ly for ly in st["map_spec"]["layers"] if ly["kind"] == "isochrone")
+        assert layer["id"] == "l_iso" and layer["source"]["href"].endswith("/layers/l_iso")
+        assert layer["source"]["type"] == "geojson" and layer["status"] == "ready"
+        # 场景不得重造声明：与原子 Skill 的产出逐字段一致
+        assert layer == iso["render_spec"]
 
     def test_scene_routing_to_site_selection(self, skill_ctx, db_ok):
         r = run_query("帮我在建设路附近选个咖啡馆位置", skill_ctx, thread_id="pytest-scene")

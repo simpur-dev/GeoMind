@@ -26,6 +26,9 @@ declare namespace AMap {
     getCenter(): LngLat;
     setZoom(zoom: number): void;
     getZoom(): number;
+    /** 叠加矢量要素（2.0 的 add/remove 接受覆盖物对象；此前未声明，amap.ts 一直在用）。 */
+    add(overlay: Overlay): void;
+    remove(overlay: Overlay | Overlay[]): void;
     destroy(): void;
     on(type: string, fn: (ev: unknown) => void): void;
   }
@@ -64,6 +67,49 @@ declare namespace AMap {
     setMap(map: Map | null): void;
   }
 
+  /** 矢量面（§9.3 的 polygon / isochrone 两种 kind 都用它承载）。 */
+  interface PolygonOptions {
+    path: [number, number][] | [number, number][][];
+    strokeColor?: string;
+    strokeWeight?: number;
+    strokeOpacity?: number;
+    strokeStyle?: "solid" | "dashed" | "dotted";
+    strokeDasharray?: number[];
+    fillColor?: string;
+    fillOpacity?: number;
+    bubble?: boolean;
+    zIndex?: number;
+    cursor?: string;
+  }
+
+  interface Polygon {
+    setMap(map: Map | null): void;
+    setPath(path: [number, number][] | [number, number][][]): void;
+    on(type: string, fn: (ev: unknown) => void): void;
+  }
+
+  /** 矢量线（§9.3 的 route / trajectory kind）。 */
+  interface PolylineOptions {
+    path: [number, number][];
+    strokeColor?: string;
+    strokeWeight?: number;
+    strokeOpacity?: number;
+    lineJoin?: "round" | "miter" | "bevel";
+    showDir?: boolean;
+    isOutline?: boolean;
+    outlineColor?: string;
+    bubble?: boolean;
+    zIndex?: number;
+  }
+
+  interface Polyline {
+    setMap(map: Map | null): void;
+    setPath(path: [number, number][]): void;
+    on(type: string, fn: (ev: unknown) => void): void;
+  }
+
+  type Overlay = Marker | Rectangle | Polygon | Polyline;
+
   interface HeatMapOptions {
     radius?: number;
     opacity?: [number, number];
@@ -87,6 +133,8 @@ declare namespace AMap {
     Map: { new (container: HTMLElement, opts?: MapOptions): Map };
     Marker: { new (opts: MarkerOptions): Marker };
     Rectangle: { new (opts: RectangleOptions): Rectangle };
+    Polygon: { new (opts: PolygonOptions): Polygon };
+    Polyline: { new (opts: PolylineOptions): Polyline };
     HeatMap: { new (map: Map, opts?: HeatMapOptions): HeatMap };
     MouseTool: { new (map: Map): MouseTool };
     plugin(name: string | string[], cb: () => void): void;

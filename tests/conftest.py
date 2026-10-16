@@ -11,6 +11,12 @@ import os
 # （env 变量优先级高于 .env 文件，pydantic-settings 标准行为）
 os.environ["GEOMIND_LLM_PROVIDER"] = "fake"
 
+# 测试也永不调真实高德：根 .env 里有有效 Web 服务 key，而图节点（spatial_join）会经
+# SpatialRouter 调 distance/路径规划——不置空，TestClient 跑一轮 chat 就是一次真实外部
+# 请求（违反铁律 6）。置空后 available=False，路由层走库内兜底/正圆降级，零外部调用。
+# 需要"在线"行为的用例自己注入 httpx.MockTransport 构造 AmapGateway。
+os.environ["GEOMIND_AMAP_KEY"] = ""
+
 import pytest
 
 from backend.app import build_services, build_skill_context

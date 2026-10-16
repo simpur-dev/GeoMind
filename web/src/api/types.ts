@@ -58,10 +58,26 @@ export interface MapSpec {
   panels: PanelSpec[];
 }
 
+/**
+ * GeoJSON 几何（后端 /layers/{id} 按 kind 出对应几何，全部 GCJ-02）：
+ * poi/heatmap=Point，route/trajectory=LineString，polygon/isochrone=Polygon。
+ */
+export type GeoGeometry =
+  | { type: "Point"; coordinates: [number, number] }
+  | { type: "LineString"; coordinates: [number, number][] }
+  | { type: "Polygon"; coordinates: [number, number][][] };
+
+export type PointGeometry = Extract<GeoGeometry, { type: "Point" }>;
+
+/** 点几何守卫：只吃点的渲染器用它，非点几何跳过而不猜坐标（§9.6 前端零计算）。 */
+export function isPoint(geom: GeoGeometry): geom is PointGeometry {
+  return geom.type === "Point";
+}
+
 /** GeoJSON FeatureCollection（后端 /layers/{id} 返回，GCJ-02）。 */
 export interface GeoJsonFeature {
   type: "Feature";
-  geometry: { type: "Point"; coordinates: [number, number] };
+  geometry: GeoGeometry;
   properties: Record<string, unknown>;
 }
 
