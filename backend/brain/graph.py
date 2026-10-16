@@ -15,7 +15,7 @@ services 通过 build_graph(ctx) 的闭包注入——不用模块级全局（�
 """
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -62,6 +62,7 @@ class BrainState(TypedDict, total=False):
     candidates: list[dict[str, Any]]
     aggs: list[dict[str, Any]]
     isochrone: dict[str, Any]      # reachability 产出（含内联 GCJ-02 geojson 与 render_spec）
+    iso_filter_skip: str           # 等时圈没参与候选筛选的原因（gesture_polygon | no_polygon）
     decision: dict[str, Any]
     map_spec: dict[str, Any]
     feedback: dict[str, Any] | None
@@ -104,8 +105,9 @@ def _constraints_node(state: BrainState, ctx: SkillContext) -> BrainState:
         # 「时间约束」两类字段口径严格分开（架构 §2.2 L2 约束建模器）：
         #   time_bucket = 客流时段（workday_evening 等，下推 fact_traffic_grid）
         #   iso_minutes / travel_mode = 等时圈时间预算与出行方式（下发 reachability）
-        # 本卡由场景默认值兜底（Skill Schema：driving / 15 min）；意图器填这两个槽位属卡 5，
-        # LLM 意图器（卡 4）用同名槽位，chips 点改（卡 6）提供第三个来源。
+        # 这两个键由意图器填（规则/LLM 同契约，卡 4），缺省即 None=用户没提；
+        # candidates 节点据其有无决定「反哺检索」还是「仅展示」（卡 5，架构 §7）。
+        # chips 点改是第三个来源（卡 6）。
         "iso_minutes": slots.get("iso_minutes"),
         "travel_mode": slots.get("travel_mode"),
     }
@@ -137,6 +139,89 @@ def _decide_node(state: BrainState, ctx: SkillContext) -> BrainState:
 
 
 # ---------------------------------------------------------------------------
+# 等时圈编排助手（架构 §7「高德出多边形 → OB ST_Contains 批量过滤」/ §3.1 闭环）
+#
+# 放在模块级而不是 build_graph 闭包里：单测能直接打这三个纯函数，
+# 不必为了验证一条判据把整张图跑一遍。
+# ---------------------------------------------------------------------------
+_ISO_CENTER_TOL = 1e-6      # 中心点复用判据的容差（约 0.1 m，比坐标本身更严）
+
+
+def _iso_defaults() -> tuple[int, str]:
+    """等时圈的两个缺省值从 Skill Schema 读，图里不写第二份（免得两处漂移）。"""
+    from backend.skills.atomic.reachability import ReachabilityInput
+
+    f = ReachabilityInput.model_fields
+    return int(f["minutes"].default), str(f["mode"].default)
+
+
+def _iso_request(spec: dict[str, Any]) -> dict[str, Any] | None:
+    """本轮要算的等时圈（中心 + 时间预算 + 方式）；没有中心点就不算。
+
+    `explicit` 只回答一个问题：用户有没有**显式**给时间预算。给了才反哺候选检索
+    （架构 §3.1：约束 → 空间计算 → 检索），没给就只是默认展示圈。
+    """
+    center = spec.get("center")
+    if not center:
+        return None
+    d_minutes, d_mode = _iso_defaults()
+    minutes = spec.get("iso_minutes")
+    mode = spec.get("travel_mode")
+    return {
+        "center": (float(center[0]), float(center[1])),
+        "minutes": int(minutes) if minutes else d_minutes,
+        "mode": str(mode) if mode else d_mode,
+        "explicit": bool(minutes),
+    }
+
+
+def _iso_matches(existing: Any, req: dict[str, Any]) -> bool:
+    """去重判据：mode / minutes / center 三项一致才复用（复用即**不再调高德**）。"""
+    if not isinstance(existing, dict) or not existing:
+        return False
+    c = existing.get("center") or {}
+    try:
+        got = (float(c["lon"]), float(c["lat"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    if any(abs(a - b) > _ISO_CENTER_TOL for a, b in zip(got, req["center"], strict=True)):
+        return False
+    if existing.get("mode") != req["mode"]:
+        return False
+    got_minutes = existing.get("minutes")
+    if got_minutes is None:
+        return False
+    try:
+        return float(got_minutes) == float(req["minutes"])
+    except (TypeError, ValueError):
+        return False
+
+
+def _isochrone_update(state: BrainState, ctx: SkillContext) -> dict[str, Any]:
+    """产出（或复用）等时圈并落图状态（架构 §2.3 第 4 步「空间计算」）。
+
+    只给既有节点补一次 L4 调用：节点集合与边一律不动（§5.6 冻结的是主图骨架）。
+    几何计算全在 SpatialRouter，本节点不知道「方位角/半径」为何物（铁律 2）。
+    """
+    req = _iso_request(state.get("spec") or {})
+    if req is None:
+        return {}
+    if _iso_matches(state.get("isochrone"), req):
+        return {}           # 复用：一次高德请求都不发
+
+    from backend.services.spatial_router import PlaceRef
+    from backend.skills.atomic.reachability import ReachabilityInput
+
+    emit(ctx, "tool.start", {"skill": "reachability"})
+    iso = ctx.tools["reachability"].run(ReachabilityInput(
+        center=PlaceRef(lonlat=req["center"]), minutes=req["minutes"], mode=req["mode"]), ctx)
+    emit(ctx, "tool.end", {"skill": "reachability", "elapsed_ms": iso.elapsed_ms,
+                            "degraded": iso.degraded})
+    # 失败也落一个空产出（而不是抛）：图不中断，l_iso 端点据此返回空集
+    return {"isochrone": iso.model_dump(mode="json") if iso.ok else {}}
+
+
+# ---------------------------------------------------------------------------
 # 图装配（services 经闭包注入）
 # ---------------------------------------------------------------------------
 def build_graph(ctx: SkillContext) -> Any:
@@ -146,49 +231,42 @@ def build_graph(ctx: SkillContext) -> Any:
         from backend.skills.atomic.multi_modal_search import MultiModalSearchInput
 
         spec = state.get("spec") or {}
+        update: dict[str, Any] = {}
+
+        # 用户显式给了时间预算 → 先算等时圈，再拿多边形反哺候选检索（§7 闭环）。
+        # 没给就完全维持现状：一个字节的行为都不变，等时圈留到 spatial_join 只做展示。
+        iso_poly: str | None = None
+        req = _iso_request(spec)
+        if req is not None and req["explicit"]:
+            update = _isochrone_update(state, ctx)
+            iso = update.get("isochrone") or {}
+            if spec.get("polygon_wkt"):
+                # 用户亲手画的框优先于推算的可达面（两个圆/面谓词同开会互相打架）
+                update["iso_filter_skip"] = "gesture_polygon"
+            elif iso.get("polygon_wkt"):
+                iso_poly = str(iso["polygon_wkt"])
+            else:
+                update["iso_filter_skip"] = "no_polygon"   # 检索宁可宽不可空
+
         emit(ctx, "tool.start", {"skill": "multi_modal_search"})
         out = ctx.tools["multi_modal_search"].run(MultiModalSearchInput(
-            center=spec.get("center"), radius_m=spec.get("radius_m"),
-            polygon_wkt=spec.get("polygon_wkt"), category_id=spec.get("category_id"),
+            # 反哺时按 SpatialConstraint 的二选一契约让位：面约束进，圆约束出
+            center=None if iso_poly else spec.get("center"),
+            radius_m=None if iso_poly else spec.get("radius_m"),
+            polygon_wkt=iso_poly or spec.get("polygon_wkt"),
+            category_id=spec.get("category_id"),
             min_rating=spec.get("min_rating"), keywords=spec.get("keywords") or [],
             query_text=spec.get("query_text"), limit=spec.get("limit") or 10,
         ), ctx)
         emit(ctx, "tool.end", {"skill": "multi_modal_search", "elapsed_ms": out.elapsed_ms,
-                                 "degraded": out.degraded})
+                                 "degraded": out.degraded,
+                                 **({"iso_filter_skip": update["iso_filter_skip"]}
+                                    if update.get("iso_filter_skip") else {})})
         # mode="json"：rating/avg_rating 是 Decimal，必须在此转成 float——
         # 这些 dict 会进 SSE 事件（decision.updated 的 top_grid 等），
         # 生成器里 json.dumps 不认 Decimal，会把整条事件流打断（实测踩坑）。
-        return {"candidates": [c.model_dump(mode="json") for c in out.candidates]}
-
-    def _isochrone_update(state: BrainState, ctx: SkillContext) -> BrainState:
-        """高德等时圈产出落图状态（架构 §2.3 第 4 步「空间计算」、§7「OB 不支持的走高德」）。
-
-        只给既有节点补一次 L4 调用：节点集合与边一律不动（§5.6 冻结的是主图骨架）。
-        几何计算全在 SpatialRouter，本节点不知道「方位角/半径」为何物（铁律 2）。
-        """
-        spec = state.get("spec") or {}
-        center = spec.get("center")
-        if not center:
-            return {}
-
-        from backend.services.spatial_router import PlaceRef
-        from backend.skills.atomic.reachability import ReachabilityInput
-
-        # 时间预算/出行方式来自约束（卡 5 起由意图器填这两个槽位）；缺省时沿用
-        # Skill Schema 的 driving / 15 min——不在图里另写一份默认值，免得两处漂移。
-        kwargs: dict[str, Any] = {}
-        if spec.get("iso_minutes"):
-            kwargs["minutes"] = int(spec["iso_minutes"])
-        if spec.get("travel_mode"):
-            kwargs["mode"] = spec["travel_mode"]
-
-        emit(ctx, "tool.start", {"skill": "reachability"})
-        iso = ctx.tools["reachability"].run(
-            ReachabilityInput(center=PlaceRef(lonlat=tuple(center)), **kwargs), ctx)
-        emit(ctx, "tool.end", {"skill": "reachability", "elapsed_ms": iso.elapsed_ms,
-                                "degraded": iso.degraded})
-        # 失败也落一个空产出（而不是抛）：图不中断，l_iso 端点据此返回空集
-        return {"isochrone": iso.model_dump(mode="json") if iso.ok else {}}
+        return cast(BrainState,
+                    {"candidates": [c.model_dump(mode="json") for c in out.candidates], **update})
 
     def spatial_join(state: BrainState, ctx: SkillContext) -> BrainState:
         from backend.skills.atomic.spatial_join_agg import SpatialJoinAggInput
@@ -201,8 +279,9 @@ def build_graph(ctx: SkillContext) -> Any:
             category_id=spec.get("category_id"), limit=100,
         ), ctx)
         emit(ctx, "tool.end", {"skill": "spatial_join_agg", "elapsed_ms": out.elapsed_ms})
-        return {"aggs": [a.model_dump(mode="json") for a in out.aggs],
-                **_isochrone_update(state, ctx)}
+        return cast(BrainState,
+                    {"aggs": [a.model_dump(mode="json") for a in out.aggs],
+                     **_isochrone_update(state, ctx)})
 
     def render(state: BrainState, ctx: SkillContext) -> BrainState:
         scene = ctx.tools.get("site_selection")

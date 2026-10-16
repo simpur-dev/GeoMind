@@ -1,11 +1,12 @@
 """场景 Skill：智能选址（架构 §5.1 的样板场景）。
 
 只写「编排 + 评分口径 + 渲染模板」，数据访问全在 L4（QueryBuilder）。
-DAG：multi_modal_search → spatial_join_agg → score_and_rank → render_spec。
+DAG：multi_modal_search → spatial_join_agg → score_and_rank →（有显式时间预算时）
+reachability → render_spec。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,9 @@ class SiteSelectionInput(BaseModel):
     min_rating: float | None = Field(default=4.0, ge=0, le=5)
     time_bucket: str = "workday_evening"
     limit: int = Field(default=10, ge=1, le=100)
+    # 时间约束（与 time_bucket 不同义）：只有显式给了才算等时圈并挂 l_iso
+    iso_minutes: int | None = Field(default=None, ge=1, le=120)
+    travel_mode: Literal["driving", "walking"] | None = None
 
 
 class ScoredCandidate(BaseModel):
@@ -52,7 +56,7 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
     metadata: SkillMetadata
     input_schema = SiteSelectionInput
     output_schema = SiteSelectionOutput
-    required_tools = ["multi_modal_search", "spatial_join_agg"]
+    required_tools = ["multi_modal_search", "spatial_join_agg", "reachability"]
 
     def __init__(self) -> None:
         self.metadata = SkillMetadata(
@@ -72,6 +76,9 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
             {"id": "s2_spatial_join", "skill": "spatial_join_agg",
              "depends_on": ["s1_candidates"]},
             {"id": "s3_score", "skill": "score_and_rank", "depends_on": ["s2_spatial_join"]},
+            # 可达性：仅当调用方显式给了时间预算才真跑（架构 §7 等时圈 → 图层）
+            {"id": "s4_reachability", "skill": "reachability",
+             "depends_on": ["s2_spatial_join"]},
         ]
 
     # ------------------------------------------------------------------
@@ -95,17 +102,35 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
             time_bucket=inputs.time_bucket, category_id=inputs.category_id, limit=100,
         ), ctx)
 
+        # s4 可达性：与 graph 路径产出对齐（有显式时间预算才算，架构 §5.1 双入口一致性）
+        iso = None
+        if inputs.iso_minutes:
+            from backend.services.spatial_router import PlaceRef
+            from backend.skills.atomic.reachability import ReachabilityInput
+
+            iso = tools["reachability"].run(ReachabilityInput(
+                center=PlaceRef(lonlat=inputs.center), minutes=inputs.iso_minutes,
+                **({"mode": inputs.travel_mode} if inputs.travel_mode else {})), ctx)
+
         # s3 打分（纯 Python 对 SQL 返回的小结果集计算，不写进 ANN SQL）
         cands = self._score(s1, s2)
         summary = self.synthesize_summary(cands)
-        layers = self.render_spec(ctx, ctx.session_id)["layers"] if cands else []
+        state: dict[str, Any] = {
+            "spec": {"center": list(inputs.center), "radius_m": inputs.radius_m},
+            "isochrone": iso.model_dump(mode="json") if iso and iso.ok else {},
+        }
+        layers = self.render_spec(ctx, ctx.session_id, state)["layers"] if cands else []
         evidence = [
             {"type": "sql", "ref": "multi_modal_search", "note": "四模混合检索"},
             {"type": "sql", "ref": "spatial_join_agg", "note": "网格聚合（grid_id JOIN）"},
         ]
+        if iso and iso.ok:
+            evidence.append({"type": "amap", "ref": "distance_matrix",
+                             "note": f"{iso.minutes} min {iso.mode} 等时圈"
+                                     f"（{'正圆降级' if iso.degraded else '高德在线采样'}）"})
         return SiteSelectionOutput(
             candidates=cands, summary=summary, layers=layers, evidence=evidence,
-            elapsed_ms=round(s1.elapsed_ms + s2.elapsed_ms, 2),
+            elapsed_ms=round(s1.elapsed_ms + s2.elapsed_ms + (iso.elapsed_ms if iso else 0.0), 2),
         )
 
     # ------------------------------------------------------------------

@@ -44,7 +44,7 @@
 | [`docs/SeekDB环境实测报告.md`](docs/SeekDB环境实测报告.md) | 实跑结论（**与架构文档冲突时以本报告为准**）：能力矩阵、算子白名单、EXPLAIN 证据、V1.4 迁移记录 |
 | [`docs/开发进度.md`](docs/开发进度.md) | 阶段 0 checklist、环境坐标速查、时间线、风险表、下一步优先级 |
 | [`docs/设计方案-技能层与状态层骨架.md`](docs/设计方案-技能层与状态层骨架.md) | 应用骨架设计（8 模块 / 不做清单 / 实施步骤 / 测试矩阵） |
-| [`backend/`](backend/) | 后端：Query Builder（三层卡点，含主键点查）+ L4 计算路由 SpatialRouter + 9 Skill + MCP + REST/SSE（图层端点 l_candidates/l_heat/l_iso/l_route）+ LangGraph 7 步（检查点可落同库 SeekDB）+ CLI。159 个 pytest + ruff + mypy 全绿 |
+| [`backend/`](backend/) | 后端：Query Builder（三层卡点，含主键点查）+ L4 计算路由 SpatialRouter + 9 Skill + MCP + REST/SSE（图层端点 l_candidates/l_heat/l_iso/l_route）+ LangGraph 7 步（等时圈反哺检索闭环；检查点可落同库 SeekDB）+ CLI。178 个 pytest + ruff + mypy 全绿 |
 | [`docs/调研报告-优秀案例.md`](docs/调研报告-优秀案例.md) | 60+ 来源汇编：学术 9 例、工业 5 例、框架选型结论 |
 | [`docs/architecture.html`](docs/architecture.html) | 六层架构可视化大图 |
 | [`docs/压测报告-10万级.md`](docs/压测报告-10万级.md) | 10 万级索引压测：空间索引不命中的坐实与两个绕行方案的量化 |
@@ -111,7 +111,7 @@ $py = "C:\Users\34928\.workbuddy\binaries\python\versions\3.13.12\python.exe"
 
 **三通道平权**（架构 §9.1）：CLI（`python -m backend.demo "查询"`）、REST/SSE（`python -m backend.main`，127.0.0.1:8000）、MCP（`python -m backend.mcp_server.server`，127.0.0.1:8765/mcp）挂在同一套内核契约上，前端可整体摘除。
 
-**质量门**：`pytest` 159 个用例（QueryBuilder 卡点含主键点查 / Skill 对拍 / 空间计算路由与降级链 / 图层端点坐标系与空集 / 检查点同库持久化 / 状态局部重算 / 7 步图 / MCP tools/list）+ `ruff check` + `mypy` 全绿；前端 `vue-tsc --noEmit -p tsconfig.app.json`（纳入 17 文件）+ `vite build`；关键断言另做变异检查逐条验红（累计 29 条全被抓住）。Python 3.11 隔离 venv：`D:\python_env\geomind`。
+**质量门**：`pytest` 178 个用例（QueryBuilder 卡点含主键点查 / Skill 对拍 / 空间计算路由与降级链 / 图层端点坐标系与空集 / 等时圈反哺闭环与去重 / 检查点同库持久化 / 状态局部重算 / 7 步图 / MCP tools/list）+ `ruff check` + `mypy` 全绿；前端 `vue-tsc --noEmit -p tsconfig.app.json`（纳入 17 文件）+ `vite build`；关键断言另做变异检查逐条验红（累计 37 条全被抓住）。Python 3.11 隔离 venv：`D:\python_env\geomind`。
 
 ## 路线图
 

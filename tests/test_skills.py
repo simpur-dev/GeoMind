@@ -119,11 +119,15 @@ class TestSiteSelectionScene:
     def test_build_plan_dag(self, skill_ctx):
         plan = skill_ctx.tools["site_selection"].build_plan(skill_ctx)
         ids = [n["id"] for n in plan]
-        assert ids == ["s1_candidates", "s2_spatial_join", "s3_score"]
+        assert ids == ["s1_candidates", "s2_spatial_join", "s3_score", "s4_reachability"]
         tools = set(skill_ctx.tools)
         for n in plan:
             if n["id"] != "s3_score":
                 assert n["skill"] in tools
+        # §5.1：可达性排在网格聚合之后（等时圈是第 4 步空间计算的产物，不参与召回排序）
+        by_id = {n["id"]: n for n in plan}
+        assert by_id["s4_reachability"]["skill"] == "reachability"
+        assert by_id["s4_reachability"]["depends_on"] == ["s2_spatial_join"]
 
     def test_render_spec_valid(self, skill_ctx):
         """render_spec 必须产出架构 §9.3 完整形态（经 contracts 模型校验）。"""
