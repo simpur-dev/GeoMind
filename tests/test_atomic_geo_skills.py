@@ -192,7 +192,9 @@ def test_reachability_render_spec_is_valid_map_spec_layer():
     assert layer.kind == "isochrone" and layer.status == "ready"
     assert layer.source is not None and layer.source.type == "geojson"
     assert layer.source.href == "/api/sessions/sess-42/layers/l_iso"
-    assert layer.data_ref == "isochrone" and layer.style["fill"].startswith("rgba(")
+    assert layer.data_ref == "isochrone"
+    # 颜色键面向 AMap 拆成 hex + 独立 opacity（rgba() 串实测整个面不可见）
+    assert layer.style["fill"].startswith("#") and 0 < layer.style["fillOpacity"] < 1
     assert layer.interactions == [] and layer.derived_from == ["reachability"]
     ring = out.geojson["features"][0]["geometry"]["coordinates"][0]
     assert len(ring) == 13 and out.geojson["features"][0]["properties"]["degraded"] is True

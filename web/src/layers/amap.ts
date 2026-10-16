@@ -199,6 +199,25 @@ class AmapHeatmapRenderer implements LayerRenderer {
 }
 
 /**
+ * 高德颜色归一：把后端 style 里的 rgba() 串 / 3 位 hex 拆成 AMap 可靠解析的
+ * 「6 位 hex + 独立 opacity」。AMap 2.0 对 rgba() 填充串实测整个面不可见，
+ * 不能直接透传（§9.3 style 声明格式不因此受限，归一是渲染器的本分）。
+ */
+function normalizeAmapColor(c: string): { color: string; alpha: number } {
+  const rgba = c.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i);
+  if (rgba) {
+    const hex = (n: string) => Number(n).toString(16).padStart(2, "0");
+    return {
+      color: `#${hex(rgba[1])}${hex(rgba[2])}${hex(rgba[3])}`,
+      alpha: rgba[4] !== undefined ? Number(rgba[4]) : 1,
+    };
+  }
+  const short = c.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+  if (short) return { color: `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`, alpha: 1 };
+  return { color: c, alpha: 1 };
+}
+
+/**
  * 面渲染器：polygon 与 isochrone 共用 AMap.Polygon（2.0 核心类，不需要插件）。
  * 差别只在后端 style 是否声明 dash；颜色/线宽全部来自 spec.style（§9.3）。
  */
@@ -213,12 +232,15 @@ class AmapPolygonRenderer implements LayerRenderer {
   apply(_map: MapAdapter, spec: LayerSpec, data: FeatureCollection): void {
     this.remove();
     const dashed = Boolean(spec.style.dash);
+    const fill = normalizeAmapColor(String(spec.style.fill ?? "#338AFF"));
+    const stroke = normalizeAmapColor(String(spec.style.stroke ?? "#1677FF"));
     for (const f of data.features) {
       if (f.geometry.type !== "Polygon") continue;
       const poly = new this.adapter.runtime.Polygon({
         path: f.geometry.coordinates,
-        fillColor: String(spec.style.fill ?? "rgba(80,140,255,0.2)"),
-        strokeColor: String(spec.style.stroke ?? "#5a9"),
+        fillColor: fill.color,
+        fillOpacity: Number(spec.style.fillOpacity ?? fill.alpha),
+        strokeColor: stroke.color,
         strokeWeight: Number(spec.style.width ?? 2),
         strokeStyle: dashed ? "dashed" : "solid",
         strokeDasharray: dashed ? [6, 4] : undefined,

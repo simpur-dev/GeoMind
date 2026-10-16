@@ -37,7 +37,10 @@ _FAILED_EVIDENCE = {"type": "amap", "ref": "distance_matrix",
 
 # 图层样式取自架构 §9.3 的 isochrone 示例条目；dash/width 也在此声明，
 # 前端渲染器只消费不决定（§9.6 前端零业务判断）。
-_ISO_STYLE = {"fill": "rgba(80,140,255,0.2)", "stroke": "#5a9", "dash": True, "width": 2}
+# 颜色用 6 位 hex + 独立 opacity 键：AMap 2.0 对 rgba() 串与 3 位 hex 解析不可靠
+# （实测 rgba 填充整个多边形不可见），前端渲染器按这两个键拆成 fillColor+fillOpacity。
+_ISO_STYLE = {"fill": "#338AFF", "fillOpacity": 0.18, "stroke": "#1677FF",
+              "dash": True, "width": 2.5}
 
 
 class ReachabilityInput(BaseModel):

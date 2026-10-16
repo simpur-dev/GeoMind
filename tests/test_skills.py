@@ -180,11 +180,12 @@ class TestIsoLayerAndCamera:
         got = next(ly for ly in spec["layers"] if ly["kind"] == "isochrone")
         assert got == iso.render_spec
         assert LayerSpec.model_validate(got).source.href.endswith("/layers/l_iso")
-        # 正圆半径 5 km（20 km/h × 15 min）：必须比候选簇经验档位 z15 拉远，且真装得下
+        # 正圆半径 5 km（20 km/h × 15 min）：镜头要拉远装圆，但不得低于 z13——
+        # 纯「装得下」会到 z10-11，候选簇在市级视野缩成一撮没法判读（实测踩坑）；
+        # 真实高德 z13 跨度约 12.8 km，10 km 直径圆整圆入画，候选簇约 90px 可读
         zoom = spec["map_view"]["zoom"]
-        assert zoom <= 10
-        span_deg = 0.02 / 2 ** (zoom - 13)                  # 与降级画布同一投影模型
-        assert span_deg >= 2 * 5000 / 111_320.0
+        assert zoom == 13
+        assert zoom < 15                                      # 确实比候选档位拉远了
 
     def test_without_isochrone_camera_unchanged(self, skill_ctx):
         """没有等时圈时，POI 镜头的经验档位行为一个字节都不变（防回归）。"""

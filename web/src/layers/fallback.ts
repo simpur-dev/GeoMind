@@ -276,9 +276,9 @@ class FallbackPolygonRenderer implements LayerRenderer {
       if (f.geometry.type !== "Polygon") continue;
       const p = document.createElementNS(SVG_NS, "path") as SVGPathElement;
       p.setAttribute("d", `${ringPath(this.map, f.geometry.coordinates[0])} Z`);
-      p.setAttribute("fill", String(spec.style.fill ?? "rgba(80,140,255,0.2)"));
-      p.setAttribute("fill-opacity", String(num(spec.style.opacity, 1)));
-      p.setAttribute("stroke", String(spec.style.stroke ?? "#5a9"));
+      p.setAttribute("fill", String(spec.style.fill ?? "#338AFF"));
+      p.setAttribute("fill-opacity", String(num(spec.style.fillOpacity, num(spec.style.opacity, 1))));
+      p.setAttribute("stroke", String(spec.style.stroke ?? "#1677FF"));
       p.setAttribute("stroke-width", String(num(spec.style.width, 2)));
       if (spec.style.dash) p.setAttribute("stroke-dasharray", "6 4");
       this.root.appendChild(p);

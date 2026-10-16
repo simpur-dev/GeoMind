@@ -192,6 +192,11 @@ class SiteSelectionSkill(SpatialSkill[SiteSelectionInput, SiteSelectionOutput]):
         radii = [v.get("radius_m") for v in (iso.get("vertices") or []) if v.get("radius_m")]
         view = (viewport_covering(center, max(radii)) if radii
                 else viewport_from_center(center, radius_m))
+        if radii:
+            # 等时圈镜头有 z13 下限：纯「装得下」会把 5 km 圆拉到 z10-11，候选簇在
+            # 市级视野里缩成一撮没法判读（实测踩坑）。真实高德 z13 跨度约 12.8 km，
+            # 10 km 直径圆仍可整圆入画，候选簇压到中心 ~90px 属可读下限。
+            view["zoom"] = max(view["zoom"], 13)
         map_spec = MapSpec(version="1.0", map_view=MapView(**view),
                            layers=layers, panels=panels)
         return map_spec.model_dump(mode="json")
