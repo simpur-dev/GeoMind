@@ -144,6 +144,7 @@ function onKeydown(e: KeyboardEvent): void {
         >{{ c.label }}<i v-if="c.key" class="chip-pen">✎</i></span>
       </template>
     </div>
+    <div v-if="store.isoSkipNote" class="iso-note">{{ store.isoSkipNote }}</div>
     <div v-if="store.error" class="chip-error">{{ store.error }}</div>
 
     <div class="input-row">
@@ -195,6 +196,8 @@ function onKeydown(e: KeyboardEvent): void {
   padding: 1px 6px; color: #0b4ea2; background: #fff; outline: none;
 }
 .chip-error { padding: 0 10px 6px; font-size: 11px; color: #cf222e; }
+/* 等时圈未参与筛选的说明（文案由 store 从后端 iso_filter_skip 映射，前端不判断） */
+.iso-note { padding: 0 10px 6px; font-size: 11px; color: #8b949e; font-style: italic; }
 
 .input-row { display: flex; gap: 6px; padding: 8px 10px 4px; }
 .chat-input {

@@ -40,6 +40,18 @@ const SKILL_TO_NODE: Record<string, GraphNode> = {
   reachability: "spatial_join",     // 等时圈与网格聚合同属第 4 步「空间计算」
 };
 
+/**
+ * 等时圈没参与候选筛选时的解释文案（架构 §3.1 可解释性补完）。
+ *
+ * 判据 `iso_filter_skip` 由后端 candidates 节点算好随 `tool.end` 下发（卡 5），
+ * 这里只做「代码 → 中文句子」的展示映射，不改判据也不另加判断（§9.6 前端零业务判断）；
+ * 陌生代码不显示（宁可不说，不说错）。
+ */
+const ISO_SKIP_NOTE: Record<string, string> = {
+  gesture_polygon: "本轮按手势框筛选，未用等时圈",
+  no_polygon: "等时圈不可用，已按半径圆筛选",
+};
+
 function freshProgress(): Record<GraphNode, NodeState> {
   return Object.fromEntries(GRAPH_NODES.map((n) => [n, "pending"])) as Record<GraphNode, NodeState>;
 }
@@ -56,6 +68,8 @@ interface SessionState {
   progress: Record<GraphNode, NodeState>;
   /** 约束视图（SSE constraints.updated；点改后再用 graph_state.spec 回读，chips 显示依据）。 */
   constraints: Record<string, unknown> | null;
+  /** 本轮等时圈未参与候选筛选的说明（tool.end 的 iso_filter_skip；下一轮开始即清除）。 */
+  isoSkipNote: string | null;
   /** 权威 Map Spec（后端下发，前端只消费）。 */
   mapSpec: MapSpec | null;
   /** SSE map.view（镜头定位事件）。 */
@@ -90,6 +104,7 @@ export const useSessionStore = defineStore("session", {
     lastQuery: "",
     progress: freshProgress(),
     constraints: null,
+    isoSkipNote: null,
     mapSpec: null,
     viewEvent: null,
     layerData: {},
@@ -225,6 +240,7 @@ export const useSessionStore = defineStore("session", {
       this.busy = true;
       this.error = null;
       this.question = null;
+      this.isoSkipNote = null;
       this.progress = freshProgress();
     },
 
@@ -303,6 +319,10 @@ export const useSessionStore = defineStore("session", {
           if (node === "candidates") next.spatial_join = "running";
           if (node === "spatial_join") next.decide = "running";
           this.progress = next;
+          const skip = d.iso_filter_skip === undefined
+            ? undefined
+            : ISO_SKIP_NOTE[String(d.iso_filter_skip)];
+          if (skip) this.isoSkipNote = skip;
           this.pushMsg("tool", `▸ ${String(d.skill)} 完成（${String(d.elapsed_ms ?? "?")} ms）`);
           break;
         }
