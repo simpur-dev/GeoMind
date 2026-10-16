@@ -1096,7 +1096,7 @@ curl -s -X POST localhost:8000/api/sessions/$SID/messages \
 # 观察 SSE 依次收到 message.token → tool.start → layer.update
 curl -s localhost:8000/api/sessions/$SID/layers/l_candidates   # 拉 GeoJSON
 curl -s -X POST localhost:8000/api/sessions/$SID/feedback \
-  -d '{"type":"constraint_edit","payload":{"rent":80000}}'      # 改约束
+  -d '{"type":"constraint_edit","payload":{"changes":{"radius_m":3000},"query":"春熙路附近的咖啡馆"}}'  # 改约束（白名单键，越界/陌生键 422）
 # SSE 随后收到 state.delta 与新的 layer.update
 ```
 
