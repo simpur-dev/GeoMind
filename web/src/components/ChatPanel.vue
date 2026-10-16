@@ -21,6 +21,8 @@ const chips = (): string[] => {
   if (c.category_id) out.push(`类目 ${c.category_id}`);
   if (c.min_rating) out.push(`评分≥${c.min_rating}`);
   if (c.time_bucket) out.push(`时段 ${c.time_bucket}`);
+  if (c.iso_minutes) out.push(`等时圈 ${String(c.iso_minutes)}min`);
+  if (c.travel_mode) out.push(`方式 ${c.travel_mode === "walking" ? "步行" : "驾车"}`);
   for (const k of (c.keywords as string[]) ?? []) out.push(`关键词 ${k}`);
   return out;
 };

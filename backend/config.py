@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
     intent_confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    # 意图解析器（架构 §10：规则版可解释可测试，LLM 版同契约无缝替换；
+    # llm 版任何失败内部降级 rule，不影响 7 步图）
+    intent_backend: Literal["rule", "llm"] = "rule"
 
     # ---- 高德网关（无 key 时所有调用降级为库内兜底，不产生外部请求） ----
     amap_key: str = ""

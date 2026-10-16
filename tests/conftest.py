@@ -10,6 +10,8 @@ import os
 # 测试永不调真实 LLM：必须在任何 Settings 实例化前覆盖 .env 里的 provider
 # （env 变量优先级高于 .env 文件，pydantic-settings 标准行为）
 os.environ["GEOMIND_LLM_PROVIDER"] = "fake"
+# 意图解析器固定 rule：LLM 版行为由注入 stub 的单测钉（test_intent_llm.py）
+os.environ["GEOMIND_INTENT_BACKEND"] = "rule"
 
 # 测试也永不调真实高德：根 .env 里有有效 Web 服务 key，而图节点（spatial_join）会经
 # SpatialRouter 调 distance/路径规划——不置空，TestClient 跑一轮 chat 就是一次真实外部

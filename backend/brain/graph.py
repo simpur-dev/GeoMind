@@ -22,7 +22,7 @@ from langgraph.types import interrupt
 
 from backend.api.contracts.map_spec import LayerSource, LayerSpec
 from backend.api.sse_bus import emit
-from backend.brain.intent import IntentResult, RuleIntentParser
+from backend.brain.intent import IntentResult, make_intent_parser
 from backend.config import get_settings
 from backend.db.checkpoint_ob import make_checkpointer
 from backend.db.connection import OBConnection
@@ -72,7 +72,9 @@ class BrainState(TypedDict, total=False):
 # 纯节点（不依赖 services，可独立测试）
 # ---------------------------------------------------------------------------
 def _intent_node(state: BrainState, ctx: SkillContext) -> BrainState:
-    parser = RuleIntentParser()
+    # 解析器按 GEOMIND_INTENT_BACKEND 切换（rule 默认 | llm），同 IntentResult 契约；
+    # LLM 版任何失败在解析器内部降级为规则版，节点不感知
+    parser = make_intent_parser()
     result: IntentResult = parser.parse(state.get("query", ""), state.get("gesture"))
     if result.question:
         # HITL：中断并等待用户补充（恢复时经 Command(resume=...) 传入）
